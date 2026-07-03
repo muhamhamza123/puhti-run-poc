@@ -1,0 +1,32 @@
+[Unit]
+Description=Puhti Run API — generic code submission to Puhti
+After=network.target
+
+[Service]
+Type=simple
+User=hbv
+Group=hbv
+WorkingDirectory=/opt/hbv/puhti-run
+
+Environment="PUHTI_HOST=puhti.csc.fi"
+Environment="PUHTI_USER=javedham"
+Environment="PUHTI_SSH_KEY=/home/hbv/.ssh/id_puhti"
+Environment="PUHTI_RUNS=/scratch/project_2014823/runs"
+Environment="RUNS_ROOT=/data/hbv/runs"
+Environment="RUN_DB_PATH=/data/hbv/runs/runs.db"
+Environment="SLURM_SH=/scratch/project_2014823/generic_run.sh"
+
+ExecStart=/opt/hbv/venv/bin/uvicorn main:app \
+    --host 0.0.0.0 \
+    --port 8002 \
+    --workers 4 \
+    --log-level info
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=puhti-run
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
