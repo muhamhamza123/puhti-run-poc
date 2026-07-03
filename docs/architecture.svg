@@ -1,0 +1,145 @@
+<svg viewBox="0 0 860 580" xmlns="http://www.w3.org/2000/svg" role="img" font-family="monospace, sans-serif" font-size="12">
+  <title>Puhti Run POC — Architecture Flow</title>
+  <desc>Shows how a user submits arbitrary Python code from a JupyterHub notebook to Puhti supercomputer and gets results back.</desc>
+
+  <!-- Zone backgrounds -->
+  <rect x="10"  y="10" width="200" height="560" rx="10" fill="#0f172a" stroke="#1e3a5f" stroke-width="1.5"/>
+  <text x="110" y="32" text-anchor="middle" fill="#3b82f6" font-size="11" font-weight="bold">USER / JUPYTERHUB</text>
+  <text x="110" y="46" text-anchor="middle" fill="#334155" font-size="9">Puhti JupyterHub</text>
+
+  <rect x="225" y="10" width="210" height="560" rx="10" fill="#0f172a" stroke="#065f46" stroke-width="1.5"/>
+  <text x="330" y="32" text-anchor="middle" fill="#10b981" font-size="11" font-weight="bold">HEAD NODE API</text>
+  <text x="330" y="46" text-anchor="middle" fill="#334155" font-size="9">hbv.we3data.com:8001</text>
+
+  <rect x="450" y="10" width="400" height="560" rx="10" fill="#0f172a" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="650" y="32" text-anchor="middle" fill="#a78bfa" font-size="11" font-weight="bold">PUHTI SUPERCOMPUTER</text>
+  <text x="650" y="46" text-anchor="middle" fill="#334155" font-size="9">puhti.csc.fi — project_2014823</text>
+
+  <!-- ── USER boxes ── -->
+  <rect x="25"  y="65"  width="170" height="50" rx="5" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1"/>
+  <text x="110" y="85"  text-anchor="middle" fill="#93c5fd" font-size="10" font-weight="bold">Notebook Widget</text>
+  <text x="110" y="99"  text-anchor="middle" fill="#64748b" font-size="9">run_button_widget.py</text>
+  <text x="110" y="111" text-anchor="middle" fill="#475569" font-size="8">partition / CPUs / RAM picker</text>
+
+  <rect x="25"  y="145" width="170" height="50" rx="5" fill="#1e293b" stroke="#3b82f6" stroke-width="1"/>
+  <text x="110" y="165" text-anchor="middle" fill="#93c5fd" font-size="10" font-weight="bold">① Upload Files</text>
+  <text x="110" y="179" text-anchor="middle" fill="#64748b" font-size="9">script.py  requirements.txt</text>
+  <text x="110" y="191" text-anchor="middle" fill="#475569" font-size="8">+ any input data files</text>
+
+  <rect x="25"  y="225" width="170" height="50" rx="5" fill="#1e293b" stroke="#3b82f6" stroke-width="1"/>
+  <text x="110" y="245" text-anchor="middle" fill="#93c5fd" font-size="10" font-weight="bold">② POST /run-code</text>
+  <text x="110" y="259" text-anchor="middle" fill="#64748b" font-size="9">multipart form via requests</text>
+  <text x="110" y="271" text-anchor="middle" fill="#475569" font-size="8">returns job_id + slurm_id</text>
+
+  <rect x="25"  y="305" width="170" height="50" rx="5" fill="#1e293b" stroke="#3b82f6" stroke-width="1"/>
+  <text x="110" y="325" text-anchor="middle" fill="#93c5fd" font-size="10" font-weight="bold">③ Poll /run-status</text>
+  <text x="110" y="339" text-anchor="middle" fill="#64748b" font-size="9">every 5s in background thread</text>
+  <text x="110" y="351" text-anchor="middle" fill="#475569" font-size="8">widget shows live status</text>
+
+  <rect x="25"  y="385" width="170" height="50" rx="5" fill="#1e293b" stroke="#3b82f6" stroke-width="1"/>
+  <text x="110" y="405" text-anchor="middle" fill="#93c5fd" font-size="10" font-weight="bold">④ GET /run-results</text>
+  <text x="110" y="419" text-anchor="middle" fill="#64748b" font-size="9">downloads ZIP of ./output/</text>
+  <text x="110" y="431" text-anchor="middle" fill="#475569" font-size="8">extracted to ./puhti_output/</text>
+
+  <!-- ── HEAD NODE boxes ── -->
+  <rect x="240" y="65"  width="180" height="50" rx="5" fill="#052e16" stroke="#10b981" stroke-width="1"/>
+  <text x="330" y="85"  text-anchor="middle" fill="#6ee7b7" font-size="10" font-weight="bold">FastAPI :8001</text>
+  <text x="330" y="99"  text-anchor="middle" fill="#64748b" font-size="9">api_run_endpoint.py</text>
+  <text x="330" y="111" text-anchor="middle" fill="#475569" font-size="8">POST /run-code  GET /run-status</text>
+
+  <rect x="240" y="145" width="180" height="50" rx="5" fill="#1e293b" stroke="#10b981" stroke-width="1"/>
+  <text x="330" y="165" text-anchor="middle" fill="#6ee7b7" font-size="10" font-weight="bold">Save to NFS</text>
+  <text x="330" y="179" text-anchor="middle" fill="#64748b" font-size="9">/data/hbv/runs/{job_id}/</text>
+  <text x="330" y="191" text-anchor="middle" fill="#475569" font-size="8">script.py  requirements.txt</text>
+
+  <rect x="240" y="225" width="180" height="50" rx="5" fill="#1e293b" stroke="#10b981" stroke-width="1"/>
+  <text x="330" y="245" text-anchor="middle" fill="#6ee7b7" font-size="10" font-weight="bold">rsync → Puhti</text>
+  <text x="330" y="259" text-anchor="middle" fill="#64748b" font-size="9">job dir to scratch/runs/{id}/</text>
+  <text x="330" y="271" text-anchor="middle" fill="#475569" font-size="8">SSH key (hbv@head)</text>
+
+  <rect x="240" y="305" width="180" height="50" rx="5" fill="#1e293b" stroke="#10b981" stroke-width="1"/>
+  <text x="330" y="325" text-anchor="middle" fill="#6ee7b7" font-size="10" font-weight="bold">SSH sbatch</text>
+  <text x="330" y="339" text-anchor="middle" fill="#64748b" font-size="9">generic_run.sh  --partition=X</text>
+  <text x="330" y="351" text-anchor="middle" fill="#475569" font-size="8">polls squeue for status</text>
+
+  <rect x="240" y="385" width="180" height="50" rx="5" fill="#1e293b" stroke="#10b981" stroke-width="1"/>
+  <text x="330" y="405" text-anchor="middle" fill="#6ee7b7" font-size="10" font-weight="bold">rsync ← Puhti</text>
+  <text x="330" y="419" text-anchor="middle" fill="#64748b" font-size="9">output/ → NFS on job done</text>
+  <text x="330" y="431" text-anchor="middle" fill="#475569" font-size="8">zipped and served to user</text>
+
+  <!-- ── PUHTI boxes ── -->
+  <rect x="465" y="65"  width="165" height="50" rx="5" fill="#2e1065" stroke="#7c3aed" stroke-width="1"/>
+  <text x="548" y="85"  text-anchor="middle" fill="#c4b5fd" font-size="10" font-weight="bold">Login Node</text>
+  <text x="548" y="99"  text-anchor="middle" fill="#64748b" font-size="9">receives SSH sbatch</text>
+  <text x="548" y="111" text-anchor="middle" fill="#475569" font-size="8">puhti-login*.csc.fi</text>
+
+  <rect x="465" y="145" width="165" height="50" rx="5" fill="#1e293b" stroke="#7c3aed" stroke-width="1"/>
+  <text x="548" y="165" text-anchor="middle" fill="#c4b5fd" font-size="10" font-weight="bold">Slurm Scheduler</text>
+  <text x="548" y="179" text-anchor="middle" fill="#64748b" font-size="9">small / large / gpu</text>
+  <text x="548" y="191" text-anchor="middle" fill="#475569" font-size="8">user picks partition</text>
+
+  <rect x="465" y="225" width="165" height="70" rx="5" fill="#1e293b" stroke="#7c3aed" stroke-width="1"/>
+  <text x="548" y="247" text-anchor="middle" fill="#c4b5fd" font-size="10" font-weight="bold">Compute / GPU Node</text>
+  <text x="548" y="261" text-anchor="middle" fill="#64748b" font-size="9">generic_run.sh</text>
+  <text x="548" y="275" text-anchor="middle" fill="#475569" font-size="8">pip install requirements.txt</text>
+  <text x="548" y="287" text-anchor="middle" fill="#475569" font-size="8">apptainer exec python script.py</text>
+
+  <rect x="465" y="325" width="165" height="50" rx="5" fill="#1e293b" stroke="#7c3aed" stroke-width="1"/>
+  <text x="548" y="345" text-anchor="middle" fill="#c4b5fd" font-size="10" font-weight="bold">Apptainer Container</text>
+  <text x="548" y="359" text-anchor="middle" fill="#64748b" font-size="9">hbv-compute.sif (reused)</text>
+  <text x="548" y="371" text-anchor="middle" fill="#475569" font-size="8">--nv flag for GPU access</text>
+
+  <rect x="650" y="225" width="185" height="150" rx="5" fill="#1e293b" stroke="#7c3aed" stroke-width="1"/>
+  <text x="743" y="247" text-anchor="middle" fill="#c4b5fd" font-size="10" font-weight="bold">Puhti Scratch</text>
+  <text x="743" y="264" text-anchor="middle" fill="#64748b" font-size="9">/scratch/project_2014823/runs/</text>
+  <text x="743" y="280" text-anchor="middle" fill="#475569" font-size="9">{job_id}/script.py</text>
+  <text x="743" y="294" text-anchor="middle" fill="#475569" font-size="9">{job_id}/requirements.txt</text>
+  <text x="743" y="308" text-anchor="middle" fill="#475569" font-size="9">{job_id}/.packages/</text>
+  <text x="743" y="322" text-anchor="middle" fill="#475569" font-size="9">{job_id}/output/  ← results</text>
+  <text x="743" y="336" text-anchor="middle" fill="#475569" font-size="9">{job_id}/stdout.txt</text>
+  <text x="743" y="350" text-anchor="middle" fill="#475569" font-size="9">{job_id}/stderr.txt</text>
+
+  <!-- Partition legend -->
+  <rect x="465" y="420" width="360" height="70" rx="5" fill="#1e1035" stroke="#6d28d9" stroke-width="1" stroke-dasharray="4,3"/>
+  <text x="645" y="438" text-anchor="middle" fill="#a78bfa" font-size="9" font-weight="bold">Available Partitions</text>
+  <text x="480" y="454" fill="#c4b5fd" font-size="9">small</text>
+  <text x="480" y="468" fill="#64748b" font-size="8">CPU jobs, up to 40 nodes</text>
+  <text x="560" y="454" fill="#c4b5fd" font-size="9">large</text>
+  <text x="560" y="468" fill="#64748b" font-size="8">big memory nodes</text>
+  <text x="640" y="454" fill="#c4b5fd" font-size="9">gpu</text>
+  <text x="640" y="468" fill="#64748b" font-size="8">V100 GPU nodes</text>
+  <text x="700" y="454" fill="#c4b5fd" font-size="9">longrun</text>
+  <text x="700" y="468" fill="#64748b" font-size="8">up to 14 days</text>
+  <text x="465" y="484" fill="#475569" font-size="8">  GPU nodes: --nv flag auto-added, CUDA visible inside container</text>
+
+  <!-- ── Arrows: User → Head Node ── -->
+  <line x1="195" y1="170" x2="240" y2="170" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arr-blue)"/>
+  <line x1="195" y1="250" x2="240" y2="250" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arr-blue)"/>
+  <line x1="195" y1="330" x2="240" y2="330" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr-blue)"/>
+  <line x1="240" y1="410" x2="195" y2="410" stroke="#10b981" stroke-width="1.5" marker-end="url(#arr-green)"/>
+
+  <!-- ── Arrows: Head Node → Puhti ── -->
+  <path d="M420 250 Q440 250 465 250" stroke="#f59e0b" stroke-width="1.5" fill="none" marker-end="url(#arr-yellow)"/>
+  <text x="442" y="244" text-anchor="middle" fill="#f59e0b" font-size="8">rsync</text>
+
+  <path d="M420 330 Q440 200 465 115" stroke="#f59e0b" stroke-width="1.5" fill="none" stroke-dasharray="5,3" marker-end="url(#arr-yellow)"/>
+  <text x="458" y="210" text-anchor="middle" fill="#f59e0b" font-size="8">SSH</text>
+
+  <!-- rsync back -->
+  <path d="M650 330 Q440 430 420 410" stroke="#10b981" stroke-width="1.5" fill="none" stroke-dasharray="5,3" marker-end="url(#arr-green)"/>
+  <text x="535" y="408" text-anchor="middle" fill="#10b981" font-size="8">rsync back</text>
+
+  <!-- ── Arrows: within Puhti ── -->
+  <line x1="548" y1="115" x2="548" y2="145" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arr-purple)"/>
+  <line x1="548" y1="195" x2="548" y2="225" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arr-purple)"/>
+  <line x1="548" y1="295" x2="548" y2="325" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arr-purple)"/>
+  <line x1="630" y1="260" x2="650" y2="260" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arr-purple)"/>
+  <line x1="650" y1="310" x2="630" y2="340" stroke="#a78bfa" stroke-width="1" stroke-dasharray="3,3" marker-end="url(#arr-purple)"/>
+
+  <defs>
+    <marker id="arr-blue"   markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#3b82f6"/></marker>
+    <marker id="arr-green"  markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#10b981"/></marker>
+    <marker id="arr-yellow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#f59e0b"/></marker>
+    <marker id="arr-purple" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#a78bfa"/></marker>
+  </defs>
+</svg>
