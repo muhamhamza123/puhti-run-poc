@@ -90,6 +90,44 @@ def _rsync_from(src: str, dst: str, timeout: int = 300):
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
+@router.post('/run-notebook')
+async def run_notebook(
+    notebook:     UploadFile = File(...),
+    requirements: Optional[UploadFile] = File(None),
+    partition:    str = Form('small'),
+    cpus:         int = Form(4),
+    memory_gb:    int = Form(16),
+):
+    """Accept a .ipynb file, convert it to script.py on the head node, then submit."""
+    if partition not in VALID_PARTITIONS:
+        raise HTTPException(400, f'Unknown partition: {partition}')
+
+    job_id  = str(uuid.uuid4())
+    job_dir = os.path.join(NFS_RUNS, job_id)
+    os.makedirs(job_dir, exist_ok=True)
+
+    # Save notebook
+    nb_path = os.path.join(job_dir, notebook.filename or 'notebook.ipynb')
+    _write_upload(notebook, nb_path)
+    if requirements:
+        _write_upload(requirements, os.path.join(job_dir, 'requirements.txt'))
+
+    # Convert notebook → script.py using nbconvert
+    result = subprocess.run(
+        ['jupyter', 'nbconvert', '--to', 'script', nb_path,
+         '--output', os.path.join(job_dir, 'script')],
+        capture_output=True, text=True,
+    )
+    script_path = os.path.join(job_dir, 'script.py')
+    if result.returncode != 0 or not os.path.exists(script_path):
+        raise HTTPException(500, f'nbconvert failed: {result.stderr.strip()}')
+
+    # Strip ipython magic lines that won't run as plain python
+    _strip_magics(script_path)
+
+    return await _submit_job(job_id, job_dir, partition, cpus, memory_gb)
+
+
 @router.post('/run-code')
 async def run_code(
     script:       UploadFile = File(...),
@@ -110,31 +148,7 @@ async def run_code(
     if requirements:
         _write_upload(requirements, os.path.join(job_dir, 'requirements.txt'))
 
-    # Rsync to Puhti scratch
-    remote_dir = f'{PUHTI_RUNS}/{job_id}'
-    _ssh(f'mkdir -p {remote_dir}')
-    _rsync_to(job_dir + '/', remote_dir + '/')
-
-    # Submit to Slurm
-    gpu_flag = '--nv' if partition in GPU_PARTITIONS else ''
-    gres     = '--gres=gpu:v100:1' if partition in GPU_PARTITIONS else ''
-    cmd = (
-        f'sbatch'
-        f' --partition={partition}'
-        f' --cpus-per-task={cpus}'
-        f' --mem={memory_gb}G'
-        f'{" " + gres if gres else ""}'
-        f' --export=ALL,JOB_DIR={remote_dir},GPU_FLAG={gpu_flag}'
-        f' {SLURM_SH}'
-    )
-    r = _ssh(cmd, timeout=30)
-    if r.returncode != 0:
-        raise HTTPException(500, f'sbatch failed: {r.stderr.strip()}')
-
-    slurm_id = r.stdout.strip().split()[-1]
-    _insert(job_id, slurm_id, partition)
-
-    return {'job_id': job_id, 'slurm_id': slurm_id, 'status': 'queued'}
+    return await _submit_job(job_id, job_dir, partition, cpus, memory_gb)
 
 
 @router.get('/run-status/{job_id}')
@@ -228,6 +242,48 @@ def run_logs(job_id: str):
 
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
+
+async def _submit_job(job_id: str, job_dir: str, partition: str,
+                      cpus: int, memory_gb: int) -> dict:
+    """Rsync job dir to Puhti and sbatch it. Shared by /run-code and /run-notebook."""
+    remote_dir = f'{PUHTI_RUNS}/{job_id}'
+    _ssh(f'mkdir -p {remote_dir}')
+    _rsync_to(job_dir + '/', remote_dir + '/')
+
+    gpu_flag = '--nv' if partition in GPU_PARTITIONS else ''
+    gres     = '--gres=gpu:v100:1' if partition in GPU_PARTITIONS else ''
+    cmd = (
+        f'sbatch'
+        f' --partition={partition}'
+        f' --cpus-per-task={cpus}'
+        f' --mem={memory_gb}G'
+        f'{" " + gres if gres else ""}'
+        f' --export=ALL,JOB_DIR={remote_dir},GPU_FLAG={gpu_flag}'
+        f' {SLURM_SH}'
+    )
+    r = _ssh(cmd, timeout=30)
+    if r.returncode != 0:
+        raise HTTPException(500, f'sbatch failed: {r.stderr.strip()}')
+
+    slurm_id = r.stdout.strip().split()[-1]
+    _insert(job_id, slurm_id, partition)
+    return {'job_id': job_id, 'slurm_id': slurm_id, 'status': 'queued'}
+
+
+def _strip_magics(script_path: str) -> None:
+    """Remove IPython magic lines (%magic, !shell) that break plain python."""
+    with open(script_path) as f:
+        lines = f.readlines()
+    cleaned = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith('%') or stripped.startswith('!'):
+            cleaned.append(f'# {line}')  # comment it out rather than delete
+        else:
+            cleaned.append(line)
+    with open(script_path, 'w') as f:
+        f.writelines(cleaned)
+
 
 def _write_upload(upload: UploadFile, path: str):
     with open(path, 'wb') as f:
