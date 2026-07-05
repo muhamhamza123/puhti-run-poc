@@ -1,0 +1,30 @@
+Bootstrap: docker
+From: python:3.11-slim
+
+%post
+    apt-get update -q && apt-get install -y --no-install-recommends \
+        gcc g++ git curl \
+        && rm -rf /var/lib/apt/lists/*
+
+    pip install --no-cache-dir \
+        numpy \
+        pandas \
+        scipy \
+        matplotlib \
+        scikit-learn \
+        ipykernel \
+        nbformat
+
+    mkdir -p /app /output
+
+%environment
+    export PYTHONUNBUFFERED=1
+
+%labels
+    Name general-compute
+    Version 1.0
+
+%help
+    General purpose Python 3.11 container for running user notebooks on Puhti.
+    Common packages: numpy, pandas, scipy, matplotlib, scikit-learn.
+    User requirements.txt installed at runtime on top of this.

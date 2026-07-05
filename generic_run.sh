@@ -8,7 +8,7 @@
 export MODULEPATH=/appl/modulefiles:$MODULEPATH
 module load apptainer 2>/dev/null || true
 
-SIF=/scratch/project_2014823/hbv/hbv-compute.sif
+SIF=/scratch/project_2014823/runs/general-compute.sif
 
 # JOB_DIR passed via --export=JOB_DIR=... points to the job's scratch folder
 # which was rsynced from the head node before sbatch was called
