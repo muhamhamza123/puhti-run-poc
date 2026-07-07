@@ -126,7 +126,8 @@ class PuhtiLauncher:
         import threading
         def _loop():
             for _ in range(240):
-                time.sleep(5)
+                if _ > 0:
+                    time.sleep(5)
                 try:
                     r = requests.get(f'{API_BASE}/run-status/{job_id}', timeout=10)
                     status = r.json().get('status', '?')
