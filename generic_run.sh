@@ -37,15 +37,20 @@ fi
 
 echo "[run] running script.py..."
 cd "${JOB_DIR}"
+mkdir -p "${JOB_DIR}/.seaborn-data" "${JOB_DIR}/.cache" "${JOB_DIR}/.config"
+
 apptainer exec \
+    --no-home \
     --bind /scratch:/scratch \
+    --bind "${JOB_DIR}:${JOB_DIR}" \
     ${GPU_FLAG:-} \
+    --env HOME="${JOB_DIR}" \
     --env PYTHONPATH="${JOB_DIR}/.packages" \
     --env MPLCONFIGDIR="${JOB_DIR}/.mplconfig" \
     --env MPLBACKEND="Agg" \
-    --env SEABORN_DATA="${JOB_DIR}/.seaborn_data" \
+    --env SEABORN_DATA="${JOB_DIR}/.seaborn-data" \
     --env XDG_CACHE_HOME="${JOB_DIR}/.cache" \
-    --env HOME="${JOB_DIR}" \
+    --env XDG_CONFIG_HOME="${JOB_DIR}/.config" \
     "${SIF}" \
     python "${JOB_DIR}/script.py"
 
