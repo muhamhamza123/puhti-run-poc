@@ -17,7 +17,6 @@ From: python:3.11-slim
         xarray \
         netCDF4 \
         rasterio \
-        pysheds \
         geopandas \
         shapely \
         fiona \
