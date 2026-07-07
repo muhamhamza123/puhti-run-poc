@@ -87,11 +87,12 @@ class PuhtiLauncher:
         self.out = w.Output()
 
         # Container request section
-        self.def_upload_btn = w.Button(
-            description='📁 Choose .def file',
-            layout=w.Layout(width='160px'),
+        self.def_uploader = w.FileUpload(
+            accept='.def',
+            multiple=False,
+            description='Upload .def',
+            layout=w.Layout(width='200px'),
         )
-        self.def_file_lbl = w.Label('No file selected')
         self.def_desc = w.Text(
             placeholder='Brief description (optional)',
             layout=w.Layout(width='350px'),
@@ -103,14 +104,13 @@ class PuhtiLauncher:
             disabled=True,
         )
         self.request_out = w.Output()
-        self._def_path = None
+        self.def_uploader.observe(self._on_def_upload, names='value')
 
         self._job_id   = None
         self._slurm_id = None
         self.refresh_btn.on_click(self._on_refresh)
         self.status_btn.on_click(self._check_status)
         self.run_btn.on_click(self._on_run)
-        self.def_upload_btn.on_click(self._pick_def)
         self.request_btn.on_click(self._on_request)
 
     def show(self):
@@ -123,7 +123,7 @@ class PuhtiLauncher:
             w.HBox([self.run_btn, self.status_btn, self.status_lbl]),
             self.out,
             w.HTML('<hr><b style="font-size:13px">Request New Container</b>'),
-            w.HBox([self.def_upload_btn, self.def_file_lbl]),
+            self.def_uploader,
             self.def_desc,
             self.request_btn,
             self.request_out,
@@ -224,37 +224,33 @@ class PuhtiLauncher:
             except Exception as e:
                 print(f'Could not fetch results: {e}')
 
-    def _pick_def(self, _):
-        import glob
-        defs = sorted(glob.glob('*.def'))
-        if not defs:
-            self.def_file_lbl.value = 'No .def files found in current directory'
-            return
-        # cycle through available .def files on each click
-        if self._def_path in defs:
-            idx = (defs.index(self._def_path) + 1) % len(defs)
-        else:
-            idx = 0
-        self._def_path = defs[idx]
-        self.def_file_lbl.value = self._def_path
-        self.request_btn.disabled = False
+    def _on_def_upload(self, change):
+        if change['new']:
+            self.request_btn.disabled = False
 
     def _on_request(self, _):
-        if not self._def_path or not os.path.exists(self._def_path):
+        uploads = self.def_uploader.value
+        if not uploads:
             with self.request_out:
-                print('No .def file selected')
+                print('Please upload a .def file first')
             return
         self.request_btn.disabled = True
         self.request_out.clear_output()
         with self.request_out:
             try:
-                with open(self._def_path, 'rb') as f:
-                    resp = requests.post(
-                        f'{API_BASE}/request-container',
-                        files={'def_file': (self._def_path, f, 'text/plain')},
-                        data={'description': self.def_desc.value.strip()},
-                        timeout=30,
-                    )
+                # ipywidgets >=8 stores uploads as a dict keyed by filename
+                if isinstance(uploads, dict):
+                    fname, fdata = next(iter(uploads.items()))
+                    content = fdata['content']
+                else:
+                    fname   = uploads[0]['name']
+                    content = uploads[0]['content']
+                resp = requests.post(
+                    f'{API_BASE}/request-container',
+                    files={'def_file': (fname, bytes(content), 'text/plain')},
+                    data={'description': self.def_desc.value.strip()},
+                    timeout=30,
+                )
                 resp.raise_for_status()
                 result = resp.json()
                 print(f'PR opened: {result["pr_url"]}')
