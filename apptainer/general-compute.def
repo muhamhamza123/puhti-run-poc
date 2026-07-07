@@ -13,6 +13,7 @@ From: python:3.11-slim
         matplotlib \
         scikit-learn \
         ipykernel \
+        seaborn \
         nbformat
 
     mkdir -p /app /output
