@@ -123,3 +123,7 @@ dmypy.json
 
 # Yarn cache
 .yarn/
+
+# Virtual environments
+venv/
+.venv/
