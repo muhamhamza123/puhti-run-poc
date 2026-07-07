@@ -30,7 +30,6 @@ if [ -f "${JOB_DIR}/requirements.txt" ]; then
         "${SIF}" \
         pip install --quiet \
             --no-cache-dir \
-            --no-build-isolation \
             -r "${JOB_DIR}/requirements.txt" \
             --target "${JOB_DIR}/.packages"
 fi
