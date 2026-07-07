@@ -4,16 +4,53 @@ on:
   push:
     branches: [main]
     paths:
-      - 'apptainer/general-compute.def'
+      - 'apptainer/**.def'
   pull_request:
     paths:
-      - 'apptainer/general-compute.def'
-  workflow_dispatch:  # allow manual trigger from GitHub UI
+      - 'apptainer/**.def'
+  workflow_dispatch:
+    inputs:
+      def_file:
+        description: 'Which .def file to build (e.g. general-compute)'
+        required: false
+        default: ''
 
 jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed def files
+        id: set
+        run: |
+          if [ -n "${{ github.event.inputs.def_file }}" ]; then
+            # Manual dispatch with explicit name
+            NAMES='["${{ github.event.inputs.def_file }}"]'
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Manual dispatch with no input — build all
+            NAMES=$(ls apptainer/*.def | xargs -I{} basename {} .def | jq -Rsc 'split("\n")[:-1]')
+          else
+            # Push/PR — build only changed ones
+            NAMES=$(git diff --name-only HEAD~1 HEAD -- 'apptainer/*.def' \
+              | xargs -I{} basename {} .def \
+              | jq -Rsc 'split("\n")[:-1]')
+          fi
+          echo "Building: $NAMES"
+          echo "matrix={\"name\":$NAMES}" >> $GITHUB_OUTPUT
+
   build:
+    needs: detect
+    if: ${{ needs.detect.outputs.matrix != '{"name":[]}' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    strategy:
+      matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
+      fail-fast: false
 
     steps:
       - name: Checkout repo
@@ -29,32 +66,33 @@ jobs:
       - name: Copy def file to Puhti scratch
         run: |
           scp -i ~/.ssh/id_puhti \
-            apptainer/general-compute.def \
-            ${{ secrets.PUHTI_USER }}@puhti.csc.fi:/scratch/project_2014823/runs/general-compute.def
+            apptainer/${{ matrix.name }}.def \
+            ${{ secrets.PUHTI_USER }}@puhti.csc.fi:/scratch/project_2014823/runs/${{ matrix.name }}.def
 
       - name: Submit container build job on Puhti
         id: submit
         run: |
+          NAME=${{ matrix.name }}
           OUTPUT=$(ssh -i ~/.ssh/id_puhti ${{ secrets.PUHTI_USER }}@puhti.csc.fi \
-            'sbatch \
+            "sbatch \
               --account=project_2014823 \
               --partition=small \
               --cpus-per-task=4 \
               --mem=16G \
               --time=01:00:00 \
-              --output=/scratch/project_2014823/runs/build-%j.out \
-              --wrap="
-                export MODULEPATH=/appl/modulefiles:\$MODULEPATH
+              --output=/scratch/project_2014823/runs/build-${NAME}-%j.out \
+              --wrap=\"
+                export MODULEPATH=/appl/modulefiles:\\\$MODULEPATH
                 module load apptainer
                 export APPTAINER_TMPDIR=/scratch/project_2014823/tmp
                 export APPTAINER_CACHEDIR=/scratch/project_2014823/apptainer-cache
-                mkdir -p \$APPTAINER_TMPDIR \$APPTAINER_CACHEDIR
+                mkdir -p \\\$APPTAINER_TMPDIR \\\$APPTAINER_CACHEDIR
                 apptainer build --force \
-                  /scratch/project_2014823/runs/general-compute.sif \
-                  /scratch/project_2014823/runs/general-compute.def \
+                  /scratch/project_2014823/runs/${NAME}.sif \
+                  /scratch/project_2014823/runs/${NAME}.def \
                 && echo BUILD_SUCCESS \
                 || echo BUILD_FAILED
-              "')
+              \"")
           echo "Submit output: $OUTPUT"
           JOB_ID=$(echo "$OUTPUT" | awk '{print $NF}')
           echo "job_id=$JOB_ID" >> $GITHUB_OUTPUT
@@ -77,23 +115,21 @@ jobs:
 
       - name: Check build result
         run: |
+          NAME=${{ matrix.name }}
           JOB_ID=${{ steps.submit.outputs.job_id }}
-          # Get build log
           ssh -i ~/.ssh/id_puhti ${{ secrets.PUHTI_USER }}@puhti.csc.fi \
-            "cat /scratch/project_2014823/runs/build-${JOB_ID}.out 2>/dev/null | tail -30"
+            "cat /scratch/project_2014823/runs/build-${NAME}-${JOB_ID}.out 2>/dev/null | tail -30"
 
-          # Check if sif exists and is recent
           RESULT=$(ssh -i ~/.ssh/id_puhti ${{ secrets.PUHTI_USER }}@puhti.csc.fi \
-            "ls -lh /scratch/project_2014823/runs/general-compute.sif 2>/dev/null | tail -1")
+            "ls -lh /scratch/project_2014823/runs/${NAME}.sif 2>/dev/null | tail -1")
           echo "SIF file: $RESULT"
 
-          # Check sacct for exit code
           STATE=$(ssh -i ~/.ssh/id_puhti ${{ secrets.PUHTI_USER }}@puhti.csc.fi \
             "sacct -j $JOB_ID --format=State --noheader | head -1 | tr -d ' '")
           echo "Final state: $STATE"
 
           if [ "$STATE" = "COMPLETED" ]; then
-            echo "✅ Container built successfully!"
+            echo "✅ ${{ matrix.name }}.sif built successfully!"
           else
             echo "❌ Build failed with state: $STATE"
             exit 1
@@ -101,11 +137,8 @@ jobs:
 
       - name: Notify success
         if: success()
-        run: |
-          echo "✅ general-compute.sif rebuilt successfully on Puhti"
-          echo "All new jobs will use the updated container"
+        run: echo "✅ ${{ matrix.name }}.sif rebuilt on Puhti"
 
       - name: Notify failure
         if: failure()
-        run: |
-          echo "❌ Container build failed — previous container still in use"
+        run: echo "❌ ${{ matrix.name }}.sif build failed — previous container still in use"

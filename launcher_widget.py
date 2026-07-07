@@ -14,6 +14,17 @@ from IPython.display import display
 import requests, time, os, zipfile, io, glob
 
 API_BASE = 'http://hbv.we3data.com:8002'
+CONTAINERS_ENDPOINT = f'{API_BASE}/containers'
+
+
+def _fetch_containers():
+    try:
+        r = requests.get(CONTAINERS_ENDPOINT, timeout=10)
+        if r.ok:
+            return r.json().get('containers', ['general-compute'])
+    except Exception:
+        pass
+    return ['general-compute']
 
 
 def _find_notebooks():
@@ -46,6 +57,12 @@ class PuhtiLauncher:
             placeholder='numpy\npandas\nmatplotlib\n...',
             description='Requirements:',
             layout=w.Layout(width='400px', height='100px'),
+        )
+        self.container_dd = w.Dropdown(
+            options=_fetch_containers(),
+            value=_fetch_containers()[0],
+            description='Container:',
+            layout=w.Layout(width='260px'),
         )
         self.partition_dd = w.Dropdown(
             options=['small', 'large', 'gpu', 'gpumedium', 'longrun'],
@@ -80,7 +97,8 @@ class PuhtiLauncher:
             w.HTML('<b style="font-size:14px">Run Notebook on Puhti</b>'),
             w.HBox([self.nb_dd, self.refresh_btn]),
             self.req_area,
-            w.HBox([self.partition_dd, self.cpus_sl, self.mem_sl]),
+            w.HBox([self.container_dd, self.partition_dd]),
+            w.HBox([self.cpus_sl, self.mem_sl]),
             w.HBox([self.run_btn, self.status_btn, self.status_lbl]),
             self.out,
         ]))
@@ -117,6 +135,7 @@ class PuhtiLauncher:
             'partition': self.partition_dd.value,
             'cpus':      str(self.cpus_sl.value),
             'memory_gb': str(self.mem_sl.value),
+            'container': self.container_dd.value,
         }
 
         try:

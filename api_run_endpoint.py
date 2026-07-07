@@ -16,8 +16,9 @@ PUHTI_USER  = os.environ.get('PUHTI_USER',    'javedham')
 PUHTI_HOST  = os.environ.get('PUHTI_HOST',    'puhti.csc.fi')
 DB_PATH     = os.environ.get('RUN_DB_PATH',   '/data/hbv/runs/runs.db')
 
-VALID_PARTITIONS = {'small', 'large', 'longrun', 'gpu', 'gpumedium'}
-GPU_PARTITIONS   = {'gpu', 'gpumedium'}
+VALID_PARTITIONS  = {'small', 'large', 'longrun', 'gpu', 'gpumedium'}
+GPU_PARTITIONS    = {'gpu', 'gpumedium'}
+DEFAULT_CONTAINER = 'general-compute'
 
 
 # ── Database ──────────────────────────────────────────────────────────────────
@@ -90,6 +91,18 @@ def _rsync_from(src: str, dst: str, timeout: int = 300):
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
+@router.get('/containers')
+def list_containers():
+    """Return available container names (any .sif in PUHTI_RUNS)."""
+    r = _ssh(f'ls {PUHTI_RUNS}/*.sif 2>/dev/null', timeout=15)
+    names = []
+    for line in r.stdout.splitlines():
+        base = os.path.basename(line)
+        if base.endswith('.sif'):
+            names.append(base[:-4])
+    return {'containers': names or [DEFAULT_CONTAINER]}
+
+
 @router.post('/run-notebook')
 async def run_notebook(
     notebook:     UploadFile = File(...),
@@ -97,6 +110,7 @@ async def run_notebook(
     partition:    str = Form('small'),
     cpus:         int = Form(4),
     memory_gb:    int = Form(16),
+    container:    str = Form(DEFAULT_CONTAINER),
 ):
     """Accept a .ipynb file, convert it to script.py on the head node, then submit."""
     if partition not in VALID_PARTITIONS:
@@ -125,7 +139,7 @@ async def run_notebook(
     # Strip ipython magic lines that won't run as plain python
     _strip_magics(script_path)
 
-    return await _submit_job(job_id, job_dir, partition, cpus, memory_gb)
+    return await _submit_job(job_id, job_dir, partition, cpus, memory_gb, container)
 
 
 @router.post('/run-code')
@@ -135,6 +149,7 @@ async def run_code(
     partition:    str = Form('small'),
     cpus:         int = Form(4),
     memory_gb:    int = Form(16),
+    container:    str = Form(DEFAULT_CONTAINER),
 ):
     if partition not in VALID_PARTITIONS:
         raise HTTPException(400, f'Unknown partition: {partition}. '
@@ -148,7 +163,7 @@ async def run_code(
     if requirements:
         _write_upload(requirements, os.path.join(job_dir, 'requirements.txt'))
 
-    return await _submit_job(job_id, job_dir, partition, cpus, memory_gb)
+    return await _submit_job(job_id, job_dir, partition, cpus, memory_gb, container)
 
 
 @router.get('/run-status/{job_id}')
@@ -244,21 +259,23 @@ def run_logs(job_id: str):
 # ── Utilities ─────────────────────────────────────────────────────────────────
 
 async def _submit_job(job_id: str, job_dir: str, partition: str,
-                      cpus: int, memory_gb: int) -> dict:
+                      cpus: int, memory_gb: int,
+                      container: str = DEFAULT_CONTAINER) -> dict:
     """Rsync job dir to Puhti and sbatch it. Shared by /run-code and /run-notebook."""
     remote_dir = f'{PUHTI_RUNS}/{job_id}'
     _ssh(f'mkdir -p {remote_dir}')
     _rsync_to(job_dir + '/', remote_dir + '/')
 
-    gpu_flag = '--nv' if partition in GPU_PARTITIONS else ''
-    gres     = '--gres=gpu:v100:1' if partition in GPU_PARTITIONS else ''
+    gpu_flag  = '--nv' if partition in GPU_PARTITIONS else ''
+    gres      = '--gres=gpu:v100:1' if partition in GPU_PARTITIONS else ''
+    sif_path  = f'{PUHTI_RUNS}/{container}.sif'
     cmd = (
         f'sbatch'
         f' --partition={partition}'
         f' --cpus-per-task={cpus}'
         f' --mem={memory_gb}G'
         f'{" " + gres if gres else ""}'
-        f' --export=ALL,JOB_DIR={remote_dir},GPU_FLAG={gpu_flag}'
+        f' --export=ALL,JOB_DIR={remote_dir},GPU_FLAG={gpu_flag},SIF_PATH={sif_path}'
         f' {SLURM_SH}'
     )
     r = _ssh(cmd, timeout=30)

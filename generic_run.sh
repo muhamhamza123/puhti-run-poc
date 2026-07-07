@@ -8,7 +8,7 @@
 export MODULEPATH=/appl/modulefiles:$MODULEPATH
 module load apptainer 2>/dev/null || true
 
-SIF=/scratch/project_2014823/runs/general-compute.sif
+SIF=${SIF_PATH:-/scratch/project_2014823/runs/general-compute.sif}
 
 mkdir -p "${JOB_DIR}/output"
 mkdir -p "${JOB_DIR}/.packages"
