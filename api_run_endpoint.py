@@ -277,12 +277,18 @@ async def request_container(
     # Create branch
     _gh('POST', '/git/refs', {'ref': f'refs/heads/{branch}', 'sha': base_sha})
 
-    # Create file on branch
-    _gh('PUT', f'/contents/{path}', {
+    # Create file on branch (include sha if file already exists)
+    file_body = {
         'message': f'Add {name} container definition',
         'content': base64.b64encode(content).decode(),
         'branch':  branch,
-    })
+    }
+    try:
+        existing = _gh('GET', f'/contents/{path}?ref={branch}')
+        file_body['sha'] = existing['sha']
+    except HTTPException:
+        pass
+    _gh('PUT', f'/contents/{path}', file_body)
 
     # Open PR
     pr_body = f'## New Container Request: `{name}`\n\n'
