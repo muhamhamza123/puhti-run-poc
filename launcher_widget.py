@@ -122,44 +122,38 @@ class PuhtiLauncher:
         )
         self._poll(job_id, slurm_id)
 
-    def _poll(self, job_id, slurm_id):
+    def _poll(self, job_id, slurm_id, attempt=0):
         import threading
-        def _loop():
+
+        def _check():
             try:
-              for _ in range(240):
-                if _ > 0:
-                    time.sleep(5)
-                try:
-                    r = requests.get(f'{API_BASE}/run-status/{job_id}', timeout=10)
-                    status = r.json().get('status', '?')
-                except Exception as e:
-                    status = '?'
-                    self.status_lbl.value = f'<span style="color:#ef4444">Poll error: {e}</span>'
-
-                color = {
-                    'queued':  '#f59e0b', 'running': '#3b82f6',
-                    'done':    '#10b981', 'failed':  '#ef4444',
-                }.get(status, '#64748b')
-                self.status_lbl.value = (
-                    f'<span style="color:{color}">Slurm {slurm_id} — {status}</span>'
-                )
-
-                if status == 'done':
-                    self._fetch_results(job_id)
-                    self.run_btn.disabled = False
-                    return
-                if status in ('failed', 'cancelled'):
-                    self._show_logs(job_id)
-                    self.run_btn.disabled = False
-                    return
-
-              self.status_lbl.value = '<span style="color:#ef4444">Timed out after 20 min</span>'
-              self.run_btn.disabled = False
+                r = requests.get(f'{API_BASE}/run-status/{job_id}', timeout=10)
+                status = r.json().get('status', '?')
             except Exception as e:
-              self.status_lbl.value = f'<span style="color:#ef4444">Polling crashed: {e}</span>'
-              self.run_btn.disabled = False
+                status = '?'
 
-        threading.Thread(target=_loop, daemon=True).start()
+            color = {
+                'queued':  '#f59e0b', 'running': '#3b82f6',
+                'done':    '#10b981', 'failed':  '#ef4444',
+            }.get(status, '#64748b')
+            self.status_lbl.value = (
+                f'<span style="color:{color}">Slurm {slurm_id} — {status}</span>'
+            )
+
+            if status == 'done':
+                self._fetch_results(job_id)
+                self.run_btn.disabled = False
+            elif status in ('failed', 'cancelled'):
+                self._show_logs(job_id)
+                self.run_btn.disabled = False
+            elif attempt < 240:
+                # schedule next poll in 5 seconds
+                threading.Timer(5.0, self._poll, args=[job_id, slurm_id, attempt + 1]).start()
+            else:
+                self.status_lbl.value = '<span style="color:#ef4444">Timed out after 20 min</span>'
+                self.run_btn.disabled = False
+
+        threading.Timer(0, _check).start()
 
     def _fetch_results(self, job_id):
         with self.out:
