@@ -115,45 +115,44 @@ class PuhtiLauncher:
             self.run_btn.disabled = False
             return
 
-        job_id   = job['job_id']
-        slurm_id = job['slurm_id']
+        self._job_id   = job['job_id']
+        self._slurm_id = job['slurm_id']
         self.status_lbl.value = (
-            f'<span style="color:#3b82f6">Submitted — Slurm {slurm_id} — polling...</span>'
+            f'<span style="color:#3b82f6">Submitted — Slurm {self._slurm_id} — click ↻ to check status</span>'
         )
-        self._poll(job_id, slurm_id)
+        self.run_btn.disabled = False
+        self.refresh_btn.description = '↻ Check status'
+        self.refresh_btn.button_style = 'info'
+        self.refresh_btn.on_click(self._check_status)
 
-    def _poll(self, job_id, slurm_id, attempt=0):
-        import threading
+    def _check_status(self, _=None):
+        job_id   = getattr(self, '_job_id', None)
+        slurm_id = getattr(self, '_slurm_id', '?')
+        if not job_id:
+            return
+        try:
+            r = requests.get(f'{API_BASE}/run-status/{job_id}', timeout=10)
+            status = r.json().get('status', '?')
+        except Exception as e:
+            self.status_lbl.value = f'<span style="color:#ef4444">Poll error: {e}</span>'
+            return
 
-        def _check():
-            try:
-                r = requests.get(f'{API_BASE}/run-status/{job_id}', timeout=10)
-                status = r.json().get('status', '?')
-            except Exception as e:
-                status = '?'
+        color = {
+            'queued':  '#f59e0b', 'running': '#3b82f6',
+            'done':    '#10b981', 'failed':  '#ef4444',
+        }.get(status, '#64748b')
+        self.status_lbl.value = (
+            f'<span style="color:{color}">Slurm {slurm_id} — {status}</span>'
+        )
 
-            color = {
-                'queued':  '#f59e0b', 'running': '#3b82f6',
-                'done':    '#10b981', 'failed':  '#ef4444',
-            }.get(status, '#64748b')
-            self.status_lbl.value = (
-                f'<span style="color:{color}">Slurm {slurm_id} — {status}</span>'
-            )
-
-            if status == 'done':
-                self._fetch_results(job_id)
-                self.run_btn.disabled = False
-            elif status in ('failed', 'cancelled'):
-                self._show_logs(job_id)
-                self.run_btn.disabled = False
-            elif attempt < 240:
-                # schedule next poll in 5 seconds
-                threading.Timer(5.0, self._poll, args=[job_id, slurm_id, attempt + 1]).start()
-            else:
-                self.status_lbl.value = '<span style="color:#ef4444">Timed out after 20 min</span>'
-                self.run_btn.disabled = False
-
-        threading.Timer(0, _check).start()
+        if status == 'done':
+            self._fetch_results(job_id)
+            self.refresh_btn.description = '↻ Refresh'
+            self.refresh_btn.button_style = ''
+        elif status in ('failed', 'cancelled'):
+            self._show_logs(job_id)
+            self.refresh_btn.description = '↻ Refresh'
+            self.refresh_btn.button_style = ''
 
     def _fetch_results(self, job_id):
         with self.out:
