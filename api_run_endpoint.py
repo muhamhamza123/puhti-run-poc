@@ -114,7 +114,7 @@ async def run_notebook(
 
     # Convert notebook → script.py using nbconvert
     result = subprocess.run(
-        ['jupyter', 'nbconvert', '--to', 'script', nb_path,
+        ['/opt/hbv/venv/bin/jupyter', 'nbconvert', '--to', 'script', nb_path,
          '--output', os.path.join(job_dir, 'script')],
         capture_output=True, text=True,
     )
