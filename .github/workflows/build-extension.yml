@@ -1,0 +1,35 @@
+name: Build JupyterLab Extension
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'extension/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./extension
+          push: true
+          tags: |
+            ghcr.io/muhamhamza123/puhti-extension:latest
+            ghcr.io/muhamhamza123/puhti-extension:${{ github.sha }}
