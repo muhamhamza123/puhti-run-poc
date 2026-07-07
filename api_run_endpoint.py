@@ -165,9 +165,16 @@ def run_status(job_id: str):
     slurm_state = r.stdout.strip()
 
     if not slurm_state:
-        # No longer in queue — check if output files exist
-        r2 = _ssh(f"ls {PUHTI_RUNS}/{job_id}/output/ 2>/dev/null | wc -l", timeout=15)
-        has_output = r2.stdout.strip() not in ('', '0')
+        # No longer in queue — rsync first, then check if output exists
+        try:
+            _rsync_from(
+                f'{PUHTI_RUNS}/{job_id}/',
+                os.path.join(NFS_RUNS, job_id) + '/',
+            )
+        except Exception:
+            pass
+        output_dir = os.path.join(NFS_RUNS, job_id, 'output')
+        has_output = os.path.isdir(output_dir) and bool(os.listdir(output_dir))
         new_status = 'done' if has_output else 'failed'
     elif slurm_state in ('RUNNING', 'COMPLETING'):
         new_status = 'running'
@@ -182,14 +189,6 @@ def run_status(job_id: str):
 
     if new_status != job['status']:
         _set_status(job_id, new_status)
-        if new_status == 'done':
-            try:
-                _rsync_from(
-                    f'{PUHTI_RUNS}/{job_id}/',
-                    os.path.join(NFS_RUNS, job_id) + '/',
-                )
-            except Exception:
-                pass
 
     return {'job_id': job_id, 'slurm_id': job['slurm_id'], 'status': new_status}
 
