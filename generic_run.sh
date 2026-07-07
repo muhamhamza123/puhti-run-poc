@@ -52,7 +52,7 @@ apptainer exec \
     --env XDG_CACHE_HOME="${JOB_DIR}/.cache" \
     --env XDG_CONFIG_HOME="${JOB_DIR}/.config" \
     "${SIF}" \
-    python "${JOB_DIR}/script.py"
+    bash -c "export HOME=${JOB_DIR}; python ${JOB_DIR}/script.py"
 
 EXIT_CODE=$?
 echo "[run] finished exit=${EXIT_CODE} at $(date)"
