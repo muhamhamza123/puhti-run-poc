@@ -22,12 +22,15 @@ echo "[run] slurm_job=${SLURM_JOB_ID} host=$(hostname) started=$(date)"
 # Install user dependencies into job-local dir on scratch (avoids home dir space limits)
 if [ -f "${JOB_DIR}/requirements.txt" ]; then
     echo "[run] installing dependencies..."
+    mkdir -p "${JOB_DIR}/.pip-tmp"
     apptainer exec \
         --bind /scratch:/scratch \
+        --env TMPDIR="${JOB_DIR}/.pip-tmp" \
         --env PIP_CACHE_DIR="${JOB_DIR}/.pip-cache" \
         "${SIF}" \
         pip install --quiet \
             --no-cache-dir \
+            --no-build-isolation \
             -r "${JOB_DIR}/requirements.txt" \
             --target "${JOB_DIR}/.packages"
 fi
