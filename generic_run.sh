@@ -45,6 +45,7 @@ apptainer exec \
     --env MPLBACKEND="Agg" \
     --env SEABORN_DATA="${JOB_DIR}/.seaborn_data" \
     --env XDG_CACHE_HOME="${JOB_DIR}/.cache" \
+    --env HOME="${JOB_DIR}" \
     "${SIF}" \
     python "${JOB_DIR}/script.py"
 
