@@ -2,8 +2,12 @@ Bootstrap: docker
 From: python:3.11-slim
 
 %post
+    export TMPDIR=/scratch/project_2014823/tmp
+    export PIP_NO_CACHE_DIR=1
+    mkdir -p $TMPDIR
+
     apt-get update -q && apt-get install -y --no-install-recommends \
-        gcc g++ git curl \
+        gcc g++ git curl libgeos-dev \
         && rm -rf /var/lib/apt/lists/*
 
     pip install --no-cache-dir \
@@ -11,7 +15,16 @@ From: python:3.11-slim
         pandas \
         scipy \
         matplotlib \
+        seaborn \
         scikit-learn \
+        statsmodels \
+        xarray \
+        netCDF4 \
+        requests \
+        tqdm \
+        joblib \
+        influxdb-client \
+        plotly \
         ipykernel \
         seaborn \
         nbformat
@@ -20,12 +33,14 @@ From: python:3.11-slim
 
 %environment
     export PYTHONUNBUFFERED=1
+    export MPLBACKEND=Agg
 
 %labels
     Name general-compute
-    Version 1.0
+    Version 2.0
 
 %help
     General purpose Python 3.11 container for running user notebooks on Puhti.
-    Common packages: numpy, pandas, scipy, matplotlib, scikit-learn.
-    User requirements.txt installed at runtime on top of this.
+    Pre-installed: numpy, pandas, scipy, matplotlib, seaborn, scikit-learn,
+    statsmodels, xarray, netCDF4, requests, tqdm, influxdb-client, plotly.
+    User requirements.txt installed at runtime for anything extra.

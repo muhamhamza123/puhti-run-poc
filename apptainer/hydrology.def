@@ -2,6 +2,10 @@ Bootstrap: docker
 From: python:3.11-slim
 
 %post
+    export TMPDIR=/scratch/project_2014823/tmp
+    export PIP_NO_CACHE_DIR=1
+    mkdir -p $TMPDIR
+
     apt-get update -q && apt-get install -y --no-install-recommends \
         gcc g++ git curl libgeos-dev libproj-dev libgdal-dev \
         && rm -rf /var/lib/apt/lists/*
