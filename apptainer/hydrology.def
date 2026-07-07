@@ -1,0 +1,39 @@
+Bootstrap: docker
+From: python:3.11-slim
+
+%post
+    apt-get update -q && apt-get install -y --no-install-recommends \
+        gcc g++ git curl libgeos-dev libproj-dev libgdal-dev \
+        && rm -rf /var/lib/apt/lists/*
+
+    pip install --no-cache-dir \
+        numpy \
+        pandas \
+        scipy \
+        matplotlib \
+        seaborn \
+        requests \
+        tqdm \
+        xarray \
+        netCDF4 \
+        rasterio \
+        pysheds \
+        geopandas \
+        shapely \
+        fiona \
+        ipykernel \
+        nbformat
+
+    mkdir -p /app /output
+
+%environment
+    export PYTHONUNBUFFERED=1
+    export MPLBACKEND=Agg
+
+%labels
+    Name hydrology
+    Version 1.0
+
+%help
+    Hydrology-focused Python 3.11 container for running user notebooks on Puhti.
+    Pre-installed: xarray, netCDF4, rasterio, pysheds, geopandas, shapely, fiona.
