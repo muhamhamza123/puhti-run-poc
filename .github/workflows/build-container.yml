@@ -1,0 +1,110 @@
+name: Build Puhti Container
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apptainer/general-compute.def'
+  pull_request:
+    paths:
+      - 'apptainer/general-compute.def'
+  workflow_dispatch:  # allow manual trigger from GitHub UI
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PUHTI_SSH_KEY }}" > ~/.ssh/id_puhti
+          chmod 600 ~/.ssh/id_puhti
+          ssh-keyscan -H puhti.csc.fi >> ~/.ssh/known_hosts
+
+      - name: Copy def file to Puhti scratch
+        run: |
+          scp -i ~/.ssh/id_puhti \
+            apptainer/general-compute.def \
+            ${{ secrets.PUHTI_USER }}@puhti.csc.fi:/scratch/project_2014823/runs/general-compute.def
+
+      - name: Submit container build job on Puhti
+        id: submit
+        run: |
+          OUTPUT=$(ssh -i ~/.ssh/id_puhti ${{ secrets.PUHTI_USER }}@puhti.csc.fi \
+            'sbatch \
+              --account=project_2014823 \
+              --partition=small \
+              --cpus-per-task=4 \
+              --mem=16G \
+              --time=01:00:00 \
+              --output=/scratch/project_2014823/runs/build-%j.out \
+              --wrap="
+                export MODULEPATH=/appl/modulefiles:\$MODULEPATH
+                module load apptainer
+                export APPTAINER_TMPDIR=/scratch/project_2014823/tmp
+                mkdir -p \$APPTAINER_TMPDIR
+                apptainer build --force \
+                  /scratch/project_2014823/runs/general-compute.sif \
+                  /scratch/project_2014823/runs/general-compute.def \
+                && echo BUILD_SUCCESS \
+                || echo BUILD_FAILED
+              "')
+          echo "Submit output: $OUTPUT"
+          JOB_ID=$(echo "$OUTPUT" | awk '{print $NF}')
+          echo "job_id=$JOB_ID" >> $GITHUB_OUTPUT
+          echo "Slurm job ID: $JOB_ID"
+
+      - name: Poll until build completes
+        run: |
+          JOB_ID=${{ steps.submit.outputs.job_id }}
+          echo "Polling job $JOB_ID..."
+          for i in $(seq 1 60); do
+            sleep 60
+            STATE=$(ssh -i ~/.ssh/id_puhti ${{ secrets.PUHTI_USER }}@puhti.csc.fi \
+              "squeue -j $JOB_ID -h --format=%T 2>/dev/null || echo DONE")
+            echo "[$i/60] State: $STATE"
+            if [ "$STATE" = "DONE" ] || [ -z "$STATE" ]; then
+              echo "Job finished, checking result..."
+              break
+            fi
+          done
+
+      - name: Check build result
+        run: |
+          JOB_ID=${{ steps.submit.outputs.job_id }}
+          # Get build log
+          ssh -i ~/.ssh/id_puhti ${{ secrets.PUHTI_USER }}@puhti.csc.fi \
+            "cat /scratch/project_2014823/runs/build-${JOB_ID}.out 2>/dev/null | tail -30"
+
+          # Check if sif exists and is recent
+          RESULT=$(ssh -i ~/.ssh/id_puhti ${{ secrets.PUHTI_USER }}@puhti.csc.fi \
+            "ls -lh /scratch/project_2014823/runs/general-compute.sif 2>/dev/null | tail -1")
+          echo "SIF file: $RESULT"
+
+          # Check sacct for exit code
+          STATE=$(ssh -i ~/.ssh/id_puhti ${{ secrets.PUHTI_USER }}@puhti.csc.fi \
+            "sacct -j $JOB_ID --format=State --noheader | head -1 | tr -d ' '")
+          echo "Final state: $STATE"
+
+          if [ "$STATE" = "COMPLETED" ]; then
+            echo "✅ Container built successfully!"
+          else
+            echo "❌ Build failed with state: $STATE"
+            exit 1
+          fi
+
+      - name: Notify success
+        if: success()
+        run: |
+          echo "✅ general-compute.sif rebuilt successfully on Puhti"
+          echo "All new jobs will use the updated container"
+
+      - name: Notify failure
+        if: failure()
+        run: |
+          echo "❌ Container build failed — previous container still in use"
