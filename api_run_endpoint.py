@@ -171,8 +171,9 @@ def run_status(job_id: str):
                 f'{PUHTI_RUNS}/{job_id}/',
                 os.path.join(NFS_RUNS, job_id) + '/',
             )
-        except Exception:
-            pass
+        except Exception as e:
+            import logging
+            logging.getLogger('puhti-run').error(f'rsync failed for {job_id}: {e}')
         output_dir = os.path.join(NFS_RUNS, job_id, 'output')
         has_output = os.path.isdir(output_dir) and bool(os.listdir(output_dir))
         new_status = 'done' if has_output else 'failed'
