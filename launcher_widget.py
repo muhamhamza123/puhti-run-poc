@@ -63,7 +63,9 @@ class PuhtiLauncher:
         self.status_lbl = w.HTML('<span style="color:#64748b">Ready</span>')
         self.out = w.Output()
 
-        self.refresh_btn.on_click(self._refresh)
+        self._job_id   = None
+        self._slurm_id = None
+        self.refresh_btn.on_click(self._on_refresh)
         self.run_btn.on_click(self._on_run)
 
     def show(self):
@@ -75,6 +77,13 @@ class PuhtiLauncher:
             w.HBox([self.run_btn, self.status_lbl]),
             self.out,
         ]))
+
+    def _on_refresh(self, _):
+        if self._job_id:
+            self._check_status()
+        else:
+            nbs = _find_notebooks()
+            self.nb_dd.options = nbs if nbs else ['(no notebooks found)']
 
     def _refresh(self, _):
         nbs = _find_notebooks()
@@ -118,12 +127,9 @@ class PuhtiLauncher:
         self._job_id   = job['job_id']
         self._slurm_id = job['slurm_id']
         self.status_lbl.value = (
-            f'<span style="color:#3b82f6">Submitted — Slurm {self._slurm_id} — click ↻ to check status</span>'
+            f'<span style="color:#3b82f6">Submitted — Slurm {self._slurm_id} — click ↻ to check</span>'
         )
         self.run_btn.disabled = False
-        self.refresh_btn.description = '↻ Check status'
-        self.refresh_btn.button_style = 'info'
-        self.refresh_btn.on_click(self._check_status)
 
     def _check_status(self, _=None):
         job_id   = getattr(self, '_job_id', None)
