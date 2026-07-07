@@ -44,7 +44,6 @@ apptainer exec \
     --bind /scratch:/scratch \
     --bind "${JOB_DIR}:${JOB_DIR}" \
     ${GPU_FLAG:-} \
-    --env HOME="${JOB_DIR}" \
     --env PYTHONPATH="${JOB_DIR}/.packages" \
     --env MPLCONFIGDIR="${JOB_DIR}/.mplconfig" \
     --env MPLBACKEND="Agg" \
