@@ -10,21 +10,26 @@ module load apptainer 2>/dev/null || true
 
 SIF=/scratch/project_2014823/runs/general-compute.sif
 
-# JOB_DIR passed via --export=JOB_DIR=... points to the job's scratch folder
-# which was rsynced from the head node before sbatch was called
 mkdir -p "${JOB_DIR}/output"
+mkdir -p "${JOB_DIR}/.packages"
+mkdir -p "${JOB_DIR}/.mplconfig"
 
 # Redirect stdout/stderr into the job dir so they rsync back with results
 exec > "${JOB_DIR}/stdout.txt" 2> "${JOB_DIR}/stderr.txt"
 
 echo "[run] slurm_job=${SLURM_JOB_ID} host=$(hostname) started=$(date)"
 
-# Install user dependencies into a job-local dir
+# Install user dependencies into job-local dir on scratch (avoids home dir space limits)
 if [ -f "${JOB_DIR}/requirements.txt" ]; then
     echo "[run] installing dependencies..."
-    apptainer exec --bind /scratch:/scratch "${SIF}" \
-        pip install --quiet -r "${JOB_DIR}/requirements.txt" \
-        --target "${JOB_DIR}/.packages"
+    apptainer exec \
+        --bind /scratch:/scratch \
+        --env PIP_CACHE_DIR="${JOB_DIR}/.pip-cache" \
+        "${SIF}" \
+        pip install --quiet \
+            --no-cache-dir \
+            -r "${JOB_DIR}/requirements.txt" \
+            --target "${JOB_DIR}/.packages"
 fi
 
 echo "[run] running script.py..."
@@ -33,6 +38,8 @@ apptainer exec \
     --bind /scratch:/scratch \
     ${GPU_FLAG:-} \
     --env PYTHONPATH="${JOB_DIR}/.packages" \
+    --env MPLCONFIGDIR="${JOB_DIR}/.mplconfig" \
+    --env MPLBACKEND="Agg" \
     "${SIF}" \
     python "${JOB_DIR}/script.py"
 
