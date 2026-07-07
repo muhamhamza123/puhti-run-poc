@@ -32,9 +32,15 @@ class PuhtiLauncher:
             layout=w.Layout(width='400px'),
         )
         self.refresh_btn = w.Button(
-            description='↻ Refresh',
-            layout=w.Layout(width='100px'),
+            description='↻ Notebooks',
+            layout=w.Layout(width='120px'),
             button_style='',
+        )
+        self.status_btn = w.Button(
+            description='⟳ Check Status',
+            layout=w.Layout(width='140px'),
+            button_style='info',
+            disabled=True,
         )
         self.req_area = w.Textarea(
             placeholder='numpy\npandas\nmatplotlib\n...',
@@ -66,6 +72,7 @@ class PuhtiLauncher:
         self._job_id   = None
         self._slurm_id = None
         self.refresh_btn.on_click(self._on_refresh)
+        self.status_btn.on_click(self._check_status)
         self.run_btn.on_click(self._on_run)
 
     def show(self):
@@ -74,16 +81,13 @@ class PuhtiLauncher:
             w.HBox([self.nb_dd, self.refresh_btn]),
             self.req_area,
             w.HBox([self.partition_dd, self.cpus_sl, self.mem_sl]),
-            w.HBox([self.run_btn, self.status_lbl]),
+            w.HBox([self.run_btn, self.status_btn, self.status_lbl]),
             self.out,
         ]))
 
     def _on_refresh(self, _):
-        if self._job_id:
-            self._check_status()
-        else:
-            nbs = _find_notebooks()
-            self.nb_dd.options = nbs if nbs else ['(no notebooks found)']
+        nbs = _find_notebooks()
+        self.nb_dd.options = nbs if nbs else ['(no notebooks found)']
 
     def _refresh(self, _):
         nbs = _find_notebooks()
@@ -127,9 +131,10 @@ class PuhtiLauncher:
         self._job_id   = job['job_id']
         self._slurm_id = job['slurm_id']
         self.status_lbl.value = (
-            f'<span style="color:#3b82f6">Submitted — Slurm {self._slurm_id} — click ↻ to check</span>'
+            f'<span style="color:#3b82f6">Submitted — Slurm {self._slurm_id}</span>'
         )
         self.run_btn.disabled = False
+        self.status_btn.disabled = False
 
     def _check_status(self, _=None):
         job_id   = getattr(self, '_job_id', None)
@@ -153,12 +158,12 @@ class PuhtiLauncher:
 
         if status == 'done':
             self._fetch_results(job_id)
-            self.refresh_btn.description = '↻ Refresh'
-            self.refresh_btn.button_style = ''
+            self.status_btn.disabled = True
+            self._job_id = None
         elif status in ('failed', 'cancelled'):
             self._show_logs(job_id)
-            self.refresh_btn.description = '↻ Refresh'
-            self.refresh_btn.button_style = ''
+            self.status_btn.disabled = True
+            self._job_id = None
 
     def _fetch_results(self, job_id):
         with self.out:
