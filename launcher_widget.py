@@ -125,14 +125,16 @@ class PuhtiLauncher:
     def _poll(self, job_id, slurm_id):
         import threading
         def _loop():
-            for _ in range(240):
+            try:
+              for _ in range(240):
                 if _ > 0:
                     time.sleep(5)
                 try:
                     r = requests.get(f'{API_BASE}/run-status/{job_id}', timeout=10)
                     status = r.json().get('status', '?')
-                except Exception:
+                except Exception as e:
                     status = '?'
+                    self.status_lbl.value = f'<span style="color:#ef4444">Poll error: {e}</span>'
 
                 color = {
                     'queued':  '#f59e0b', 'running': '#3b82f6',
@@ -151,8 +153,11 @@ class PuhtiLauncher:
                     self.run_btn.disabled = False
                     return
 
-            self.status_lbl.value = '<span style="color:#ef4444">Timed out after 20 min</span>'
-            self.run_btn.disabled = False
+              self.status_lbl.value = '<span style="color:#ef4444">Timed out after 20 min</span>'
+              self.run_btn.disabled = False
+            except Exception as e:
+              self.status_lbl.value = f'<span style="color:#ef4444">Polling crashed: {e}</span>'
+              self.run_btn.disabled = False
 
         threading.Thread(target=_loop, daemon=True).start()
 
