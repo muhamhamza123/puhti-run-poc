@@ -43,6 +43,8 @@ apptainer exec \
     --env PYTHONPATH="${JOB_DIR}/.packages" \
     --env MPLCONFIGDIR="${JOB_DIR}/.mplconfig" \
     --env MPLBACKEND="Agg" \
+    --env SEABORN_DATA="${JOB_DIR}/.seaborn_data" \
+    --env XDG_CACHE_HOME="${JOB_DIR}/.cache" \
     "${SIF}" \
     python "${JOB_DIR}/script.py"
 
