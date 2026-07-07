@@ -142,7 +142,7 @@ class PuhtiLauncher:
         if not job_id:
             return
         try:
-            r = requests.get(f'{API_BASE}/run-status/{job_id}', timeout=10)
+            r = requests.get(f'{API_BASE}/run-status/{job_id}', timeout=60)
             status = r.json().get('status', '?')
         except Exception as e:
             self.status_lbl.value = f'<span style="color:#ef4444">Poll error: {e}</span>'
