@@ -1,7 +1,8 @@
 """
 Complete /run-code API router — submit, status, logs, results.
 """
-import io, os, uuid, shutil, subprocess, sqlite3, zipfile, contextlib
+import io, os, uuid, shutil, subprocess, sqlite3, zipfile, contextlib, base64, re
+import urllib.request, urllib.error, json
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from typing import Optional
@@ -19,6 +20,9 @@ DB_PATH     = os.environ.get('RUN_DB_PATH',   '/data/hbv/runs/runs.db')
 VALID_PARTITIONS  = {'small', 'large', 'longrun', 'gpu', 'gpumedium'}
 GPU_PARTITIONS    = {'gpu', 'gpumedium'}
 DEFAULT_CONTAINER = 'general-compute'
+
+GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '')
+GITHUB_REPO  = os.environ.get('GITHUB_REPO', 'muhamhamza123/puhti-run-poc')
 
 
 # ── Database ──────────────────────────────────────────────────────────────────
@@ -232,6 +236,68 @@ def run_results(job_id: str):
         media_type='application/zip',
         headers={'Content-Disposition': f'attachment; filename=results_{job_id[:8]}.zip'},
     )
+
+
+@router.post('/request-container')
+async def request_container(
+    def_file: UploadFile = File(...),
+    description: str = Form(''),
+):
+    """Accept a .def file and open a GitHub PR to add it as a new container."""
+    if not GITHUB_TOKEN:
+        raise HTTPException(500, 'GITHUB_TOKEN not configured on server')
+
+    content = await def_file.read()
+    name = re.sub(r'[^a-z0-9-]', '-', (def_file.filename or 'custom').replace('.def', '').lower())
+    branch = f'container/{name}-{uuid.uuid4().hex[:6]}'
+    path   = f'apptainer/{name}.def'
+
+    headers = {
+        'Authorization': f'token {GITHUB_TOKEN}',
+        'Accept': 'application/vnd.github+json',
+        'Content-Type': 'application/json',
+    }
+
+    def _gh(method, endpoint, body=None):
+        url = f'https://api.github.com/repos/{GITHUB_REPO}{endpoint}'
+        data = json.dumps(body).encode() if body else None
+        req  = urllib.request.Request(url, data=data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            raise HTTPException(502, f'GitHub API error: {e.read().decode()}')
+
+    # Get default branch SHA
+    repo_info  = _gh('GET', '')
+    default_br = repo_info['default_branch']
+    ref_info   = _gh('GET', f'/git/ref/heads/{default_br}')
+    base_sha   = ref_info['object']['sha']
+
+    # Create branch
+    _gh('POST', '/git/refs', {'ref': f'refs/heads/{branch}', 'sha': base_sha})
+
+    # Create file on branch
+    _gh('PUT', f'/contents/{path}', {
+        'message': f'Add {name} container definition',
+        'content': base64.b64encode(content).decode(),
+        'branch':  branch,
+    })
+
+    # Open PR
+    pr_body = f'## New Container Request: `{name}`\n\n'
+    if description:
+        pr_body += f'**Description:** {description}\n\n'
+    pr_body += f'This PR adds `apptainer/{name}.def`. Merging will trigger an automatic build of `{name}.sif` on Puhti.'
+
+    pr = _gh('POST', '/pulls', {
+        'title': f'Add container: {name}',
+        'body':  pr_body,
+        'head':  branch,
+        'base':  default_br,
+    })
+
+    return {'pr_url': pr['html_url'], 'container_name': name, 'branch': branch}
 
 
 @router.get('/run-logs/{job_id}')

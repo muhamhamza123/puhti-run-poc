@@ -15,6 +15,8 @@ Environment="PUHTI_RUNS=/scratch/project_2014823/runs"
 Environment="RUNS_ROOT=/data/hbv/runs"
 Environment="RUN_DB_PATH=/data/hbv/runs/runs.db"
 Environment="SLURM_SH=/scratch/project_2014823/generic_run.sh"
+Environment="GITHUB_TOKEN=your_token_here"
+Environment="GITHUB_REPO=muhamhamza123/puhti-run-poc"
 
 ExecStartPre=/usr/bin/scp -i /home/hbv/.ssh/id_puhti \
     /opt/hbv/puhti-run/generic_run.sh \
