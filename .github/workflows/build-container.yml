@@ -47,7 +47,8 @@ jobs:
                 export MODULEPATH=/appl/modulefiles:\$MODULEPATH
                 module load apptainer
                 export APPTAINER_TMPDIR=/scratch/project_2014823/tmp
-                mkdir -p \$APPTAINER_TMPDIR
+                export APPTAINER_CACHEDIR=/scratch/project_2014823/apptainer-cache
+                mkdir -p \$APPTAINER_TMPDIR \$APPTAINER_CACHEDIR
                 apptainer build --force \
                   /scratch/project_2014823/runs/general-compute.sif \
                   /scratch/project_2014823/runs/general-compute.def \
