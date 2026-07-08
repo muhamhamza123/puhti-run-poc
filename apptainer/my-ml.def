@@ -1,0 +1,36 @@
+Bootstrap: docker
+From: python:3.11-slim
+
+%post
+    export TMPDIR=/scratch/project_2014823/tmp
+    export PIP_NO_CACHE_DIR=1
+    mkdir -p $TMPDIR
+
+    apt-get update -q && apt-get install -y --no-install-recommends \
+        gcc g++ git curl libgeos-dev \
+        && rm -rf /var/lib/apt/lists/*
+
+    pip install --no-cache-dir \
+        numpy \
+        pandas \
+        matplotlib \
+        seaborn \
+        requests \
+        tqdm \
+        ipykernel \
+        nbformat \
+        torch
+
+    mkdir -p /app /output
+
+%environment
+    export PYTHONUNBUFFERED=1
+    export MPLBACKEND=Agg
+
+%labels
+    Name my-ml
+    Version 1.0
+
+%help
+    Custom container: my-ml
+    Extra packages: torch
