@@ -123,13 +123,16 @@ def _rsync_from(src: str, dst: str, timeout: int = 300):
 @router.get('/containers')
 def list_containers():
     """Return available container names (any .sif in PUHTI_RUNS)."""
-    r = _ssh(f'ls {PUHTI_RUNS}/*.sif 2>/dev/null', timeout=15)
-    names = []
-    for line in r.stdout.splitlines():
-        base = os.path.basename(line)
-        if base.endswith('.sif'):
-            names.append(base[:-4])
-    return {'containers': names or [DEFAULT_CONTAINER]}
+    try:
+        r = _ssh(f'ls {PUHTI_RUNS}/*.sif 2>/dev/null', timeout=15)
+        names = []
+        for line in r.stdout.splitlines():
+            base = os.path.basename(line)
+            if base.endswith('.sif'):
+                names.append(base[:-4])
+        return {'containers': names or [DEFAULT_CONTAINER]}
+    except Exception:
+        return {'containers': [DEFAULT_CONTAINER], 'puhti_unreachable': True}
 
 
 @router.post('/run-notebook')
