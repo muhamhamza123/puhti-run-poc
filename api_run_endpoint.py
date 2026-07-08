@@ -37,17 +37,22 @@ def _db():
             slurm_id  TEXT,
             status    TEXT DEFAULT 'queued',
             partition TEXT,
+            username  TEXT DEFAULT '',
             created   TEXT DEFAULT (datetime('now'))
         )
     """)
+    # migrate existing tables that lack username column
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(runs)").fetchall()]
+    if 'username' not in cols:
+        conn.execute("ALTER TABLE runs ADD COLUMN username TEXT DEFAULT ''")
     conn.commit()
     return conn
 
 
-def _insert(job_id, slurm_id, partition):
+def _insert(job_id, slurm_id, partition, username=''):
     with contextlib.closing(_db()) as db:
-        db.execute("INSERT INTO runs (job_id, slurm_id, partition) VALUES (?,?,?)",
-                   (job_id, slurm_id, partition))
+        db.execute("INSERT INTO runs (job_id, slurm_id, partition, username) VALUES (?,?,?,?)",
+                   (job_id, slurm_id, partition, username))
         db.commit()
 
 
@@ -115,6 +120,7 @@ async def run_notebook(
     cpus:         int = Form(4),
     memory_gb:    int = Form(16),
     container:    str = Form(DEFAULT_CONTAINER),
+    username:     str = Form(''),
 ):
     """Accept a .ipynb file, convert it to script.py on the head node, then submit."""
     if partition not in VALID_PARTITIONS:
@@ -143,7 +149,7 @@ async def run_notebook(
     # Strip ipython magic lines that won't run as plain python
     _strip_magics(script_path)
 
-    return await _submit_job(job_id, job_dir, partition, cpus, memory_gb, container)
+    return await _submit_job(job_id, job_dir, partition, cpus, memory_gb, container, username)
 
 
 @router.post('/run-code')
@@ -154,6 +160,7 @@ async def run_code(
     cpus:         int = Form(4),
     memory_gb:    int = Form(16),
     container:    str = Form(DEFAULT_CONTAINER),
+    username:     str = Form(''),
 ):
     if partition not in VALID_PARTITIONS:
         raise HTTPException(400, f'Unknown partition: {partition}. '
@@ -167,7 +174,19 @@ async def run_code(
     if requirements:
         _write_upload(requirements, os.path.join(job_dir, 'requirements.txt'))
 
-    return await _submit_job(job_id, job_dir, partition, cpus, memory_gb, container)
+    return await _submit_job(job_id, job_dir, partition, cpus, memory_gb, container, username)
+
+
+@router.get('/my-jobs/{username}')
+def my_jobs(username: str):
+    """Return all jobs submitted by a given username, newest first."""
+    with contextlib.closing(_db()) as db:
+        rows = db.execute(
+            "SELECT job_id, slurm_id, status, partition, created FROM runs "
+            "WHERE username=? ORDER BY created DESC LIMIT 50",
+            (username,)
+        ).fetchall()
+    return {'jobs': [dict(r) for r in rows]}
 
 
 @router.get('/run-status/{job_id}')
@@ -185,9 +204,11 @@ def run_status(job_id: str):
 
     if not slurm_state:
         # No longer in queue — rsync first, then check if output exists
+        user_slug  = re.sub(r'[^a-z0-9_-]', '_', (job.get('username') or '').lower()) or 'anonymous'
+        remote_dir = f'{PUHTI_RUNS}/{user_slug}/{job_id}'
         try:
             _rsync_from(
-                f'{PUHTI_RUNS}/{job_id}/',
+                f'{remote_dir}/',
                 os.path.join(NFS_RUNS, job_id) + '/',
             )
         except Exception as e:
@@ -312,11 +333,13 @@ def run_logs(job_id: str):
     if not job:
         raise HTTPException(404, 'Job not found')
 
-    local_job = os.path.join(NFS_RUNS, job_id)
+    local_job  = os.path.join(NFS_RUNS, job_id)
+    user_slug  = re.sub(r'[^a-z0-9_-]', '_', (job.get('username') or '').lower()) or 'anonymous'
+    remote_dir = f'{PUHTI_RUNS}/{user_slug}/{job_id}'
     try:
         for fname in ('stdout.txt', 'stderr.txt'):
             _rsync_from(
-                f'{PUHTI_RUNS}/{job_id}/{fname}',
+                f'{remote_dir}/{fname}',
                 local_job + '/',
             )
     except Exception:
@@ -332,13 +355,15 @@ def run_logs(job_id: str):
 
 async def _submit_job(job_id: str, job_dir: str, partition: str,
                       cpus: int, memory_gb: int,
-                      container: str = DEFAULT_CONTAINER) -> dict:
+                      container: str = DEFAULT_CONTAINER,
+                      username: str = '') -> dict:
     """Rsync job dir to Puhti and sbatch it. Shared by /run-code and /run-notebook."""
-    remote_dir = f'{PUHTI_RUNS}/{job_id}'
+    user_slug  = re.sub(r'[^a-z0-9_-]', '_', username.lower()) if username else 'anonymous'
+    remote_dir = f'{PUHTI_RUNS}/{user_slug}/{job_id}'
     _ssh(f'mkdir -p {remote_dir}')
     _rsync_to(job_dir + '/', remote_dir + '/')
 
-    gpu_flag  = '--nv' if partition in GPU_PARTITIONS else ''
+    use_gpu   = '1' if partition in GPU_PARTITIONS else '0'
     gres      = '--gres=gpu:v100:1' if partition in GPU_PARTITIONS else ''
     sif_path  = f'{PUHTI_RUNS}/{container}.sif'
     cmd = (
@@ -347,7 +372,7 @@ async def _submit_job(job_id: str, job_dir: str, partition: str,
         f' --cpus-per-task={cpus}'
         f' --mem={memory_gb}G'
         f'{" " + gres if gres else ""}'
-        f' --export=ALL,JOB_DIR={remote_dir},GPU_FLAG={gpu_flag},SIF_PATH={sif_path}'
+        f' --export=ALL,JOB_DIR={remote_dir},USE_GPU={use_gpu},SIF_PATH={sif_path}'
         f' {SLURM_SH}'
     )
     r = _ssh(cmd, timeout=30)
@@ -355,7 +380,7 @@ async def _submit_job(job_id: str, job_dir: str, partition: str,
         raise HTTPException(500, f'sbatch failed: {r.stderr.strip()}')
 
     slurm_id = r.stdout.strip().split()[-1]
-    _insert(job_id, slurm_id, partition)
+    _insert(job_id, slurm_id, partition, username)
     return {'job_id': job_id, 'slurm_id': slurm_id, 'status': 'queued'}
 
 

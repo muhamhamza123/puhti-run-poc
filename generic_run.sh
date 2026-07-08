@@ -43,7 +43,7 @@ apptainer exec \
     --no-home \
     --bind /scratch:/scratch \
     --bind "${JOB_DIR}:${JOB_DIR}" \
-    ${GPU_FLAG:-} \
+    $( [ "${USE_GPU:-0}" = "1" ] && echo "--nv" ) \
     --env PYTHONPATH="${JOB_DIR}/.packages" \
     --env MPLCONFIGDIR="${JOB_DIR}/.mplconfig" \
     --env MPLBACKEND="Agg" \
