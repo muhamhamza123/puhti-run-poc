@@ -68,6 +68,15 @@ def _set_status(job_id, status):
         db.commit()
 
 
+def _active_count(username: str) -> int:
+    with contextlib.closing(_db()) as db:
+        row = db.execute(
+            "SELECT COUNT(*) FROM runs WHERE username=? AND status IN ('queued','running')",
+            (username,)
+        ).fetchone()
+        return row[0] if row else 0
+
+
 # ── SSH / rsync helpers ───────────────────────────────────────────────────────
 
 def _ssh(cmd: str, timeout: int = 30):
@@ -327,6 +336,20 @@ async def request_container(
     return {'pr_url': pr['html_url'], 'container_name': name, 'branch': branch}
 
 
+@router.post('/cancel-job/{job_id}')
+def cancel_job(job_id: str):
+    job = _get(job_id)
+    if not job:
+        raise HTTPException(404, 'Job not found')
+    if job['status'] in ('done', 'failed', 'cancelled'):
+        return {'job_id': job_id, 'status': job['status'], 'message': 'Job already finished'}
+    r = _ssh(f"scancel {job['slurm_id']}", timeout=15)
+    if r.returncode != 0:
+        raise HTTPException(500, f'scancel failed: {r.stderr.strip()}')
+    _set_status(job_id, 'cancelled')
+    return {'job_id': job_id, 'slurm_id': job['slurm_id'], 'status': 'cancelled'}
+
+
 @router.get('/run-logs/{job_id}')
 def run_logs(job_id: str):
     job = _get(job_id)
@@ -353,11 +376,17 @@ def run_logs(job_id: str):
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
 
+MAX_CONCURRENT = int(os.environ.get('MAX_CONCURRENT_JOBS', '3'))
+
+
 async def _submit_job(job_id: str, job_dir: str, partition: str,
                       cpus: int, memory_gb: int,
                       container: str = DEFAULT_CONTAINER,
                       username: str = '') -> dict:
     """Rsync job dir to Puhti and sbatch it. Shared by /run-code and /run-notebook."""
+    if username and _active_count(username) >= MAX_CONCURRENT:
+        raise HTTPException(429, f'Too many active jobs. Max {MAX_CONCURRENT} concurrent jobs per user.')
+
     user_slug  = re.sub(r'[^a-z0-9_-]', '_', username.lower()) if username else 'anonymous'
     remote_dir = f'{PUHTI_RUNS}/{user_slug}/{job_id}'
     _ssh(f'mkdir -p {remote_dir}')
