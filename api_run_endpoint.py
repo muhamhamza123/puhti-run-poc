@@ -268,17 +268,70 @@ def run_results(job_id: str):
     )
 
 
-@router.post('/request-container')
-async def request_container(
-    def_file: UploadFile = File(...),
+def _generate_def(name: str, packages: list[str]) -> bytes:
+    pkg_lines = '\n        '.join(packages)
+    template = f"""Bootstrap: docker
+From: python:3.11-slim
+
+%post
+    export TMPDIR=/scratch/project_2014823/tmp
+    export PIP_NO_CACHE_DIR=1
+    mkdir -p $TMPDIR
+
+    apt-get update -q && apt-get install -y --no-install-recommends \\
+        gcc g++ git curl libgeos-dev \\
+        && rm -rf /var/lib/apt/lists/*
+
+    pip install --no-cache-dir \\
+        numpy \\
+        pandas \\
+        matplotlib \\
+        seaborn \\
+        requests \\
+        tqdm \\
+        ipykernel \\
+        nbformat \\
+        {pkg_lines}
+
+    mkdir -p /app /output
+
+%environment
+    export PYTHONUNBUFFERED=1
+    export MPLBACKEND=Agg
+
+%labels
+    Name {name}
+    Version 1.0
+
+%help
+    Custom container: {name}
+    Extra packages: {', '.join(packages)}
+"""
+    return template.encode()
+
+
+@router.post('/request-container-simple')
+async def request_container_simple(
+    name:        str = Form(...),
+    packages:    str = Form(...),
     description: str = Form(''),
 ):
-    """Accept a .def file and open a GitHub PR to add it as a new container."""
+    """Generate a .def from a package list and open a PR."""
+    if not re.match(r'^[a-z0-9-]+$', name):
+        raise HTTPException(400, 'Container name must be lowercase letters, numbers, and hyphens only')
+
+    pkg_list = [p.strip() for p in packages.splitlines() if p.strip()]
+    if not pkg_list:
+        raise HTTPException(400, 'At least one package is required')
+
+    content = _generate_def(name, pkg_list)
+    return await _open_container_pr(name, content, description, pkg_list)
+
+
+async def _open_container_pr(name: str, content: bytes, description: str, packages: list[str] = []) -> dict:
     if not GITHUB_TOKEN:
         raise HTTPException(500, 'GITHUB_TOKEN not configured on server')
 
-    content = await def_file.read()
-    name = re.sub(r'[^a-z0-9-]', '-', (def_file.filename or 'custom').replace('.def', '').lower())
     branch = f'container/{name}-{uuid.uuid4().hex[:6]}'
     path   = f'apptainer/{name}.def'
 
@@ -298,16 +351,13 @@ async def request_container(
         except urllib.error.HTTPError as e:
             raise HTTPException(502, f'GitHub API error: {e.read().decode()}')
 
-    # Get default branch SHA
     repo_info  = _gh('GET', '')
     default_br = repo_info['default_branch']
     ref_info   = _gh('GET', f'/git/ref/heads/{default_br}')
     base_sha   = ref_info['object']['sha']
 
-    # Create branch
     _gh('POST', '/git/refs', {'ref': f'refs/heads/{branch}', 'sha': base_sha})
 
-    # Create file on branch (include sha if file already exists)
     file_body = {
         'message': f'Add {name} container definition',
         'content': base64.b64encode(content).decode(),
@@ -320,10 +370,11 @@ async def request_container(
         pass
     _gh('PUT', f'/contents/{path}', file_body)
 
-    # Open PR
     pr_body = f'## New Container Request: `{name}`\n\n'
     if description:
         pr_body += f'**Description:** {description}\n\n'
+    if packages:
+        pr_body += f'**Packages:** `{"`, `".join(packages)}`\n\n'
     pr_body += f'This PR adds `apptainer/{name}.def`. Merging will trigger an automatic build of `{name}.sif` on Puhti.'
 
     pr = _gh('POST', '/pulls', {
@@ -334,6 +385,16 @@ async def request_container(
     })
 
     return {'pr_url': pr['html_url'], 'container_name': name, 'branch': branch}
+
+
+@router.post('/request-container')
+async def request_container(
+    def_file: UploadFile = File(...),
+    description: str = Form(''),
+):
+    content = await def_file.read()
+    name = re.sub(r'[^a-z0-9-]', '-', (def_file.filename or 'custom').replace('.def', '').lower())
+    return await _open_container_pr(name, content, description)
 
 
 @router.post('/cancel-job/{job_id}')
