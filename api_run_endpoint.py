@@ -41,6 +41,17 @@ def _db():
             created   TEXT DEFAULT (datetime('now'))
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS container_requests (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            username     TEXT,
+            container    TEXT,
+            pr_url       TEXT,
+            pr_number    INTEGER,
+            status       TEXT DEFAULT 'pending',
+            created      TEXT DEFAULT (datetime('now'))
+        )
+    """)
     # migrate existing tables that lack username column
     cols = [r[1] for r in conn.execute("PRAGMA table_info(runs)").fetchall()]
     if 'username' not in cols:
@@ -268,6 +279,49 @@ def run_results(job_id: str):
     )
 
 
+LABEL_RULES = {
+    'hydrology':  {'xarray', 'netcdf4', 'rasterio', 'geopandas', 'fiona', 'shapely', 'pysheds', 'hydromt'},
+    'ml':         {'torch', 'tensorflow', 'keras', 'scikit-learn', 'sklearn', 'xgboost', 'lightgbm', 'transformers', 'huggingface'},
+    'geospatial': {'gdal', 'rasterio', 'geopandas', 'cartopy', 'pyproj', 'shapely', 'fiona'},
+}
+
+
+def _detect_labels(packages: list[str]) -> list[str]:
+    pkg_set = {p.lower().split('==')[0].split('>=')[0].strip() for p in packages}
+    labels = ['container-request']
+    for label, keywords in LABEL_RULES.items():
+        if pkg_set & keywords:
+            labels.append(label)
+    if not any(l in labels for l in LABEL_RULES):
+        labels.append('general')
+    return labels
+
+
+def _parse_packages_from_def(content: bytes) -> list[str]:
+    packages = []
+    in_pip = False
+    for line in content.decode(errors='ignore').splitlines():
+        stripped = line.strip()
+        if 'pip install' in stripped:
+            in_pip = True
+        if in_pip:
+            pkg = stripped.rstrip('\\').strip()
+            if pkg and not pkg.startswith('#') and not pkg.startswith('pip') and not pkg.startswith('--'):
+                packages.append(pkg)
+            if not stripped.endswith('\\'):
+                in_pip = False
+    return packages
+
+
+def _store_container_request(username: str, container: str, pr_url: str, pr_number: int):
+    with contextlib.closing(_db()) as db:
+        db.execute(
+            "INSERT INTO container_requests (username, container, pr_url, pr_number) VALUES (?,?,?,?)",
+            (username, container, pr_url, pr_number)
+        )
+        db.commit()
+
+
 def _generate_def(name: str, packages: list[str]) -> bytes:
     pkg_lines = '\n        '.join(packages)
     template = f"""Bootstrap: docker
@@ -315,6 +369,7 @@ async def request_container_simple(
     name:        str = Form(...),
     packages:    str = Form(...),
     description: str = Form(''),
+    username:    str = Form(''),
 ):
     """Generate a .def from a package list and open a PR."""
     if not re.match(r'^[a-z0-9-]+$', name):
@@ -325,10 +380,10 @@ async def request_container_simple(
         raise HTTPException(400, 'At least one package is required')
 
     content = _generate_def(name, pkg_list)
-    return await _open_container_pr(name, content, description, pkg_list)
+    return await _open_container_pr(name, content, description, pkg_list, username)
 
 
-async def _open_container_pr(name: str, content: bytes, description: str, packages: list[str] = []) -> dict:
+async def _open_container_pr(name: str, content: bytes, description: str, packages: list[str] = [], username: str = '') -> dict:
     if not GITHUB_TOKEN:
         raise HTTPException(500, 'GITHUB_TOKEN not configured on server')
 
@@ -384,17 +439,70 @@ async def _open_container_pr(name: str, content: bytes, description: str, packag
         'base':  default_br,
     })
 
+    # Auto-label
+    labels = _detect_labels(packages)
+    try:
+        _gh('POST', f'/issues/{pr["number"]}/labels', {'labels': labels})
+    except Exception:
+        pass
+
+    # Store request for notification tracking
+    if username:
+        _store_container_request(username, name, pr['html_url'], pr['number'])
+
     return {'pr_url': pr['html_url'], 'container_name': name, 'branch': branch}
 
 
 @router.post('/request-container')
 async def request_container(
-    def_file: UploadFile = File(...),
+    def_file:    UploadFile = File(...),
     description: str = Form(''),
+    username:    str = Form(''),
 ):
-    content = await def_file.read()
-    name = re.sub(r'[^a-z0-9-]', '-', (def_file.filename or 'custom').replace('.def', '').lower())
-    return await _open_container_pr(name, content, description)
+    content  = await def_file.read()
+    name     = re.sub(r'[^a-z0-9-]', '-', (def_file.filename or 'custom').replace('.def', '').lower())
+    packages = _parse_packages_from_def(content)
+    return await _open_container_pr(name, content, description, packages, username)
+
+
+@router.get('/my-container-requests/{username}')
+def my_container_requests(username: str):
+    """Return container requests for a user, checking live PR status from GitHub."""
+    with contextlib.closing(_db()) as db:
+        rows = db.execute(
+            "SELECT id, container, pr_url, pr_number, status, created FROM container_requests "
+            "WHERE username=? ORDER BY created DESC LIMIT 20",
+            (username,)
+        ).fetchall()
+    if not rows:
+        return {'requests': []}
+
+    headers = {
+        'Authorization': f'token {GITHUB_TOKEN}',
+        'Accept': 'application/vnd.github+json',
+    }
+
+    results = []
+    for row in rows:
+        r = dict(row)
+        if r['status'] == 'pending' and GITHUB_TOKEN:
+            try:
+                url = f'https://api.github.com/repos/{GITHUB_REPO}/pulls/{r["pr_number"]}'
+                req = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    pr = json.loads(resp.read())
+                if pr.get('merged'):
+                    r['status'] = 'merged'
+                    with contextlib.closing(_db()) as db:
+                        db.execute("UPDATE container_requests SET status='merged' WHERE id=?", (r['id'],))
+                        db.commit()
+                elif pr.get('state') == 'closed':
+                    r['status'] = 'closed'
+            except Exception:
+                pass
+        results.append(r)
+
+    return {'requests': results}
 
 
 @router.post('/cancel-job/{job_id}')
