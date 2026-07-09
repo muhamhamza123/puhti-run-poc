@@ -14,7 +14,9 @@ router = APIRouter(prefix='/admin')
 GITHUB_CLIENT_ID      = os.environ.get('GITHUB_CLIENT_ID', '')
 GITHUB_CLIENT_SECRET  = os.environ.get('GITHUB_CLIENT_SECRET', '')
 GITHUB_ORG            = os.environ.get('GITHUB_ADMIN_ORG', 'DIWA-data-lab')
-SESSION_SECRET        = os.environ.get('ADMIN_SESSION_SECRET', 'change-me-in-override')
+SESSION_SECRET = os.environ.get('ADMIN_SESSION_SECRET', '')
+if not SESSION_SECRET:
+    raise RuntimeError('ADMIN_SESSION_SECRET env var must be set — refusing to start with insecure default')
 PUBLIC_URL            = os.environ.get('PUBLIC_URL', 'https://hbv.we3data.com/puhti')
 
 DB_PATH    = os.environ.get('RUN_DB_PATH',   '/data/hbv/runs/runs.db')
@@ -500,25 +502,6 @@ def admin_history_by_user(days: int = 30, admin_session: str | None = Cookie(def
             GROUP BY username ORDER BY total DESC
         ''', (f'-{days} days',)).fetchall()
     return {'users': [dict(r) for r in rows]}
-
-
-@router.get('/debug-db')
-def admin_debug_db(admin_session: str | None = Cookie(default=None)):
-    """Quick DB diagnostic — row count, date range, null usernames."""
-    _require_auth(admin_session)
-    with contextlib.closing(_db()) as db:
-        total = db.execute('SELECT COUNT(*) FROM runs').fetchone()[0]
-        null_users = db.execute('SELECT COUNT(*) FROM runs WHERE username IS NULL OR username=""').fetchone()[0]
-        date_range = db.execute('SELECT MIN(created), MAX(created) FROM runs').fetchone()
-        sample = db.execute('SELECT username, status, created FROM runs ORDER BY created DESC LIMIT 5').fetchall()
-        last30 = db.execute('SELECT COUNT(*) FROM runs WHERE created >= date("now", "-30 days")').fetchone()[0]
-    return {
-        'total_rows': total,
-        'null_or_empty_username': null_users,
-        'date_range': {'min': date_range[0], 'max': date_range[1]},
-        'last_30_days_rows': last30,
-        'recent_sample': [dict(r) for r in sample],
-    }
 
 
 @router.get('/refresh-puhti')

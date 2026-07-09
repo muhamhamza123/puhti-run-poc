@@ -1,10 +1,11 @@
 """
 Complete /run-code API router — submit, status, logs, results.
 """
-import io, os, uuid, shutil, subprocess, sqlite3, zipfile, contextlib, base64, re
+import io, os, uuid, time, shutil, subprocess, sqlite3, zipfile, contextlib, base64, re
 import urllib.request, urllib.error, json, smtplib
 from email.mime.text import MIMEText
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Header
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Header, Request
+import collections, threading
 from fastapi.responses import StreamingResponse
 from typing import Optional
 
@@ -82,6 +83,8 @@ def _db():
         conn.execute("ALTER TABLE runs ADD COLUMN username TEXT DEFAULT ''")
     if 'email' not in cols:
         conn.execute("ALTER TABLE runs ADD COLUMN email TEXT DEFAULT ''")
+    # Fix 6: backfill NULL/empty usernames so reports don't show (anon)
+    conn.execute("UPDATE runs SET username='unknown' WHERE username IS NULL OR username=''")
     conn.commit()
     return conn
 
@@ -183,6 +186,7 @@ def list_containers():
 
 @router.post('/run-notebook')
 async def run_notebook(
+    request:      Request,
     notebook:     UploadFile = File(...),
     requirements: Optional[UploadFile] = File(None),
     partition:    str = Form('small'),
@@ -194,6 +198,7 @@ async def run_notebook(
     x_jupyterhub_token: Optional[str] = Header(None),
 ):
     """Accept a .ipynb file, convert it to script.py on the head node, then submit."""
+    _check_rate_limit(request)
     if partition not in VALID_PARTITIONS:
         raise HTTPException(400, f'Unknown partition: {partition}')
 
@@ -227,6 +232,7 @@ async def run_notebook(
 
 @router.post('/run-code')
 async def run_code(
+    request:      Request,
     script:       UploadFile = File(...),
     requirements: Optional[UploadFile] = File(None),
     partition:    str = Form('small'),
@@ -237,6 +243,7 @@ async def run_code(
     email:        str = Form(''),
     x_jupyterhub_token: Optional[str] = Header(None),
 ):
+    _check_rate_limit(request)
     if partition not in VALID_PARTITIONS:
         raise HTTPException(400, f'Unknown partition: {partition}. '
                                  f'Choose from {sorted(VALID_PARTITIONS)}')
@@ -256,8 +263,13 @@ async def run_code(
 
 
 @router.get('/my-jobs/{username}')
-def my_jobs(username: str):
+def my_jobs(username: str, x_jupyterhub_token: Optional[str] = Header(None)):
     """Return all jobs submitted by a given username, newest first."""
+    token_user = _validate_jupyterhub_token(x_jupyterhub_token) if x_jupyterhub_token else None
+    if token_user and token_user != username:
+        raise HTTPException(403, 'Token does not match requested username')
+    if not token_user:
+        raise HTTPException(401, 'Missing JupyterHub token')
     with contextlib.closing(_db()) as db:
         rows = db.execute(
             "SELECT job_id, slurm_id, status, partition, created FROM runs "
@@ -268,8 +280,13 @@ def my_jobs(username: str):
 
 
 @router.get('/my-jobs-status/{username}')
-def my_jobs_status(username: str):
-    """Return all jobs for a user with statuses refreshed in a single Slurm SSH call."""
+def my_jobs_status(username: str, x_jupyterhub_token: Optional[str] = Header(None)):
+    """Return all jobs for a user with statuses refreshed in a single Slurm SSH call."""""
+    token_user = _validate_jupyterhub_token(x_jupyterhub_token) if x_jupyterhub_token else None
+    if token_user and token_user != username:
+        raise HTTPException(403, 'Token does not match requested username')
+    if not token_user:
+        raise HTTPException(401, 'Missing JupyterHub token')
     with contextlib.closing(_db()) as db:
         rows = db.execute(
             "SELECT job_id, slurm_id, status, partition, created FROM runs "
@@ -657,6 +674,22 @@ def run_logs(job_id: str):
 # ── Utilities ─────────────────────────────────────────────────────────────────
 
 MAX_CONCURRENT = int(os.environ.get('MAX_CONCURRENT_JOBS', '3'))
+
+# Simple sliding-window rate limiter: max N submissions per IP per minute
+_rate_lock = threading.Lock()
+_rate_hits: dict = collections.defaultdict(list)
+_RATE_LIMIT = int(os.environ.get('SUBMIT_RATE_LIMIT', '10'))  # requests per minute per IP
+
+def _check_rate_limit(request: Request):
+    ip = request.client.host if request.client else 'unknown'
+    now = time.time()
+    with _rate_lock:
+        hits = _rate_hits[ip]
+        # keep only hits in the last 60s
+        _rate_hits[ip] = [t for t in hits if now - t < 60]
+        if len(_rate_hits[ip]) >= _RATE_LIMIT:
+            raise HTTPException(429, f'Too many requests. Max {_RATE_LIMIT} submissions per minute.')
+        _rate_hits[ip].append(now)
 
 
 @router.post('/resubmit/{job_id}')

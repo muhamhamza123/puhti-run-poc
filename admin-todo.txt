@@ -3,35 +3,35 @@ Production TODO — Puhti Admin & API
 Last updated: 2026-07-09
 
 
-🔴 CRITICAL (must fix before real users)
+🔴 CRITICAL — ALL FIXED 2026-07-09
 -----------------------------------------
 
-1. Remove debug-db endpoint
+1. [DONE] Remove debug-db endpoint
    File: admin.py — @router.get('/debug-db')
    The endpoint is auth-protected but still exposes raw DB internals.
    Remove it once the breakdown-by-user bug is confirmed resolved.
 
-2. SESSION_SECRET has an insecure default
+2. [DONE] SESSION_SECRET has an insecure default
    File: admin.py line 17 — SESSION_SECRET = os.environ.get('ADMIN_SESSION_SECRET', 'change-me-in-override')
    If deployed without ADMIN_SESSION_SECRET set in override.conf, all admin
    sessions are forgeable. Should crash on startup if the env var is missing.
 
-3. GITHUB_TOKEN placeholder in service file
+3. [DONE] GITHUB_TOKEN placeholder in service file
    File: deploy/puhti-run.service — GITHUB_TOKEN=your_token_here
    Real token lives in override.conf but if someone redeploys from the service
    file directly it breaks silently. Remove the placeholder line entirely.
 
-4. No rate limiting on submit endpoints
+4. [DONE] No rate limiting on submit endpoints
    Files: api_run_endpoint.py — /run-code, /run-notebook
    The 3-job-per-user cap exists but there is no IP or global rate limit.
    A user who keeps polling or submitting can hammer SSH to Puhti.
 
-5. /my-jobs and /my-jobs-status have no auth
+5. [DONE] /my-jobs and /my-jobs-status have no auth
    File: api_run_endpoint.py — /my-jobs/{username}, /my-jobs-status/{username}
    Anyone who knows a username can poll their jobs or trigger status updates.
    Should require the JupyterHub token header (x-jupyterhub-token).
 
-6. 48 rows with NULL username in DB
+6. [DONE] 48 rows with NULL username in DB
    File: runs.db — runs table
    Jobs submitted before username was stored show as (anon) in all reports.
    One-time migration: UPDATE runs SET username='unknown' WHERE username IS NULL OR username='';
