@@ -149,7 +149,7 @@ def _ssh(cmd: str, timeout: int = 30) -> str:
 
 _puhti_cache: dict = {}
 _puhti_cache_ts: float = 0
-_CACHE_TTL = 60  # seconds
+_CACHE_TTL = 900  # 15 minutes
 
 
 def _puhti_data() -> dict:
@@ -247,6 +247,98 @@ def _puhti_data() -> dict:
     except Exception:
         data['monthly_usage'] = []
 
+
+    # Node health (per-node state, CPUs, memory)
+    try:
+        out = _ssh('sinfo -N -o "%N|%T|%C|%m|%e" --noheader 2>/dev/null')
+        nodes = []
+        for line in out.splitlines():
+            parts = line.split('|')
+            if len(parts) < 5:
+                continue
+            cpus_str = parts[2]  # alloc/idle/other/total
+            alloc, idle, other, total = cpus_str.split('/') if '/' in cpus_str else ('?','?','?','?')
+            nodes.append({
+                'node': parts[0],
+                'state': parts[1],
+                'cpus_alloc': alloc, 'cpus_idle': idle, 'cpus_total': total,
+                'mem_total_mb': parts[3],
+                'mem_free_mb': parts[4],
+            })
+        data['nodes'] = nodes
+    except Exception:
+        data['nodes'] = []
+
+    # GPU partition detail
+    try:
+        out = _ssh('sinfo -p gpu -N -o "%N|%T|%G|%C" --noheader 2>/dev/null')
+        gpu_nodes = []
+        for line in out.splitlines():
+            parts = line.split('|')
+            if len(parts) < 4:
+                continue
+            cpus_str = parts[3]
+            alloc, idle, other, total = cpus_str.split('/') if '/' in cpus_str else ('?','?','?','?')
+            gpu_nodes.append({
+                'node': parts[0], 'state': parts[1],
+                'gres': parts[2],
+                'cpus_alloc': alloc, 'cpus_total': total,
+            })
+        data['gpu_nodes'] = gpu_nodes
+    except Exception:
+        data['gpu_nodes'] = []
+
+    # Pending reasons breakdown
+    try:
+        out = _ssh('squeue -A project_2014823 -t PD -o "%R" --noheader 2>/dev/null')
+        reasons: dict = {}
+        for line in out.splitlines():
+            r = line.strip()
+            if r:
+                reasons[r] = reasons.get(r, 0) + 1
+        data['pending_reasons'] = [{'reason': k, 'count': v}
+                                    for k, v in sorted(reasons.items(), key=lambda x: -x[1])]
+    except Exception:
+        data['pending_reasons'] = []
+
+    # Job efficiency via sacct (CPU used vs allocated, last 30 days)
+    try:
+        from datetime import date, timedelta
+        start30 = (date.today() - timedelta(days=30)).strftime('%Y-%m-%d')
+        out = _ssh(
+            f'sacct -A project_2014823 --starttime={start30} --noheader '
+            f'--format=User,CPUTimeRAW,TotalCPU,State -P 2>/dev/null'
+        )
+        eff: dict = {}
+        for line in out.splitlines():
+            parts = line.split('|')
+            if len(parts) < 4 or not parts[0] or parts[3] not in ('COMPLETED','FAILED'):
+                continue
+            user = parts[0]
+            try:
+                allocated = int(parts[1])
+                # TotalCPU is HH:MM:SS
+                tc = parts[2]
+                h, m, s = (tc.split(':') + ['0','0','0'])[:3]
+                used = int(h)*3600 + int(m)*60 + int(float(s))
+            except (ValueError, AttributeError):
+                continue
+            if allocated == 0:
+                continue
+            if user not in eff:
+                eff[user] = {'allocated': 0, 'used': 0, 'jobs': 0}
+            eff[user]['allocated'] += allocated
+            eff[user]['used'] += used
+            eff[user]['jobs'] += 1
+        data['efficiency'] = [
+            {'user': u, 'efficiency_pct': round(v['used']/v['allocated']*100, 1),
+             'jobs': v['jobs'], 'cpu_hours_alloc': round(v['allocated']/3600,1)}
+            for u, v in sorted(eff.items(), key=lambda x: x[1]['allocated'], reverse=True)
+            if v['allocated'] > 0
+        ]
+    except Exception:
+        data['efficiency'] = []
+
     _puhti_cache = data
     _puhti_cache_ts = time.time()
     return data
@@ -299,6 +391,8 @@ def admin_stats(admin_session: str | None = Cookie(default=None)):
                    SUM(CASE WHEN status="done"      THEN 1 ELSE 0 END) as done,
                    SUM(CASE WHEN status="failed"    THEN 1 ELSE 0 END) as failed,
                    SUM(CASE WHEN status IN ("queued","running") THEN 1 ELSE 0 END) as active,
+                   SUM(CASE WHEN status="running" THEN 1 ELSE 0 END) as running,
+                   SUM(CASE WHEN status="cancelled" THEN 1 ELSE 0 END) as cancelled,
                    MAX(created) as last_active
             FROM runs GROUP BY username ORDER BY last_active DESC
         ''').fetchall()
@@ -323,20 +417,32 @@ def admin_puhti(admin_session: str | None = Cookie(default=None)):
 
 
 @router.get('/history')
-def admin_history(days: int = 30, admin_session: str | None = Cookie(default=None)):
-    """Job counts per day for the last N days, grouped by status."""
+def admin_history(days: int = 30, username: str = '', admin_session: str | None = Cookie(default=None)):
+    """Job counts per day for the last N days, grouped by status. Optional username filter."""
     _require_auth(admin_session)
     with contextlib.closing(_db()) as db:
-        rows = db.execute('''
-            SELECT date(created) as day,
-                   SUM(CASE WHEN status="done"      THEN 1 ELSE 0 END) as done,
-                   SUM(CASE WHEN status="failed"    THEN 1 ELSE 0 END) as failed,
-                   SUM(CASE WHEN status="cancelled" THEN 1 ELSE 0 END) as cancelled,
-                   COUNT(*) as total
-            FROM runs
-            WHERE created >= date("now", ?)
-            GROUP BY day ORDER BY day ASC
-        ''', (f'-{days} days',)).fetchall()
+        if username:
+            rows = db.execute('''
+                SELECT date(created) as day,
+                       SUM(CASE WHEN status="done"      THEN 1 ELSE 0 END) as done,
+                       SUM(CASE WHEN status="failed"    THEN 1 ELSE 0 END) as failed,
+                       SUM(CASE WHEN status="cancelled" THEN 1 ELSE 0 END) as cancelled,
+                       COUNT(*) as total
+                FROM runs
+                WHERE created >= date("now", ?) AND username=?
+                GROUP BY day ORDER BY day ASC
+            ''', (f'-{days} days', username)).fetchall()
+        else:
+            rows = db.execute('''
+                SELECT date(created) as day,
+                       SUM(CASE WHEN status="done"      THEN 1 ELSE 0 END) as done,
+                       SUM(CASE WHEN status="failed"    THEN 1 ELSE 0 END) as failed,
+                       SUM(CASE WHEN status="cancelled" THEN 1 ELSE 0 END) as cancelled,
+                       COUNT(*) as total
+                FROM runs
+                WHERE created >= date("now", ?)
+                GROUP BY day ORDER BY day ASC
+            ''', (f'-{days} days',)).fetchall()
     return {'history': [dict(r) for r in rows]}
 
 
@@ -570,13 +676,24 @@ pre.billing{background:var(--bg3);border:1px solid var(--border);border-radius:6
         <canvas id="chart-partitions" height="160"></canvas>
       </div>
     </div>
-    <div class="tbl-box">
-      <div class="tbl-header"><h3>Active Jobs</h3><span class="chip" id="d-active-count">0</span></div>
-      <div class="tbl-wrap">
-      <table>
-        <thead><tr><th>User</th><th>Slurm Job</th><th>Partition</th><th>State</th><th>Time Limit</th></tr></thead>
-        <tbody id="d-queue-body"></tbody>
-      </table>
+    <div class="two-col" style="margin-bottom:16px">
+      <div class="tbl-box">
+        <div class="tbl-header"><h3>Active Jobs</h3><span class="chip" id="d-active-count">0</span></div>
+        <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>User</th><th>Slurm Job</th><th>Partition</th><th>State</th><th>Time Limit</th></tr></thead>
+          <tbody id="d-queue-body"></tbody>
+        </table>
+        </div>
+      </div>
+      <div class="tbl-box">
+        <div class="tbl-header"><h3>Top Users — All Time</h3></div>
+        <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>User</th><th>Total Jobs</th><th>Done</th><th>Failed</th><th>Last Active</th></tr></thead>
+          <tbody id="d-top-users-body"></tbody>
+        </table>
+        </div>
       </div>
     </div>
   </div>
@@ -636,14 +753,28 @@ pre.billing{background:var(--bg3);border:1px solid var(--border);border-radius:6
 
   <!-- HISTORY -->
   <div class="page" id="page-history">
+    <div class="tbl-header" style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:12px 16px;margin-bottom:16px;gap:12px">
+      <h3 style="font-size:13px;font-weight:600">Job History</h3>
+      <div class="filters" style="margin-left:auto">
+        <select id="hist-user-filter" onchange="loadHistory()" style="width:180px">
+          <option value="">All users</option>
+        </select>
+        <select id="hist-days-filter" onchange="loadHistory()">
+          <option value="30">Last 30 days</option>
+          <option value="60">Last 60 days</option>
+          <option value="90">Last 90 days</option>
+        </select>
+      </div>
+    </div>
     <div class="cards" style="margin-bottom:20px">
-      <div class="card"><div class="card-val" id="h-total" style="color:var(--blue)">—</div><div class="card-lbl">Jobs (30d)</div></div>
-      <div class="card"><div class="card-val" id="h-done" style="color:var(--green)">—</div><div class="card-lbl">Completed (30d)</div></div>
-      <div class="card"><div class="card-val" id="h-failed" style="color:var(--red)">—</div><div class="card-lbl">Failed (30d)</div></div>
+      <div class="card"><div class="card-val" id="h-total" style="color:var(--blue)">—</div><div class="card-lbl">Total Jobs</div></div>
+      <div class="card"><div class="card-val" id="h-done" style="color:var(--green)">—</div><div class="card-lbl">Completed</div></div>
+      <div class="card"><div class="card-val" id="h-failed" style="color:var(--red)">—</div><div class="card-lbl">Failed</div></div>
+      <div class="card"><div class="card-val" id="h-cancelled" style="color:var(--text2)">—</div><div class="card-lbl">Cancelled</div></div>
       <div class="card"><div class="card-val" id="h-rate" style="color:var(--cyan)">—</div><div class="card-lbl">Success Rate</div></div>
     </div>
     <div class="chart-box" style="margin-bottom:16px">
-      <div class="chart-title">Daily Job Activity <small>last 30 days</small></div>
+      <div class="chart-title">Daily Job Activity <small id="hist-chart-label">last 30 days — all users</small></div>
       <canvas id="chart-history2" height="180"></canvas>
     </div>
     <div class="tbl-box">
@@ -693,10 +824,19 @@ pre.billing{background:var(--bg3);border:1px solid var(--border);border-radius:6
 
   <!-- PUHTI SYSTEM -->
   <div class="page" id="page-puhti">
-    <div style="margin-bottom:16px">
+    <div class="two-col" style="margin-bottom:16px">
       <div class="chart-box">
         <div class="chart-title">Billing Units — project_2014823</div>
         <pre class="billing" id="billing-text">Loading…</pre>
+      </div>
+      <div class="tbl-box">
+        <div class="tbl-header"><h3>Pending Reasons</h3><span class="chip" id="pr-count">0</span></div>
+        <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Reason</th><th>Jobs</th></tr></thead>
+          <tbody id="pending-body"></tbody>
+        </table>
+        </div>
       </div>
     </div>
     <div class="two-col" style="margin-bottom:16px">
@@ -717,6 +857,43 @@ pre.billing{background:var(--bg3);border:1px solid var(--border);border-radius:6
           <tbody id="usage-body"></tbody>
         </table>
         </div>
+      </div>
+    </div>
+    <div class="tbl-box" style="margin-bottom:16px">
+      <div class="tbl-header"><h3>CPU Efficiency — Last 30 Days</h3><small style="color:var(--text2);font-size:10px;margin-left:8px">actual CPU used vs allocated</small></div>
+      <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>User</th><th>Jobs</th><th>CPU Hours Alloc</th><th>Efficiency</th></tr></thead>
+        <tbody id="eff-body"></tbody>
+      </table>
+      </div>
+    </div>
+    <div class="tbl-box" style="margin-bottom:16px">
+      <div class="tbl-header"><h3>GPU Nodes</h3></div>
+      <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Node</th><th>State</th><th>GPUs</th><th>CPUs Alloc</th><th>CPUs Total</th></tr></thead>
+        <tbody id="gpu-body"></tbody>
+      </table>
+      </div>
+    </div>
+    <div class="tbl-box">
+      <div class="tbl-header">
+        <h3>Node Health</h3>
+        <span class="chip" id="node-count">0</span>
+        <div class="filters" style="margin-left:auto">
+          <select id="node-state-filter" onchange="filterNodes()">
+            <option value="">All states</option>
+            <option>idle</option><option>allocated</option><option>mixed</option>
+            <option>drain</option><option>down</option>
+          </select>
+        </div>
+      </div>
+      <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Node</th><th>State</th><th>CPUs Alloc</th><th>CPUs Idle</th><th>CPUs Total</th><th>Mem Total</th><th>Mem Free</th><th>Utilization</th></tr></thead>
+        <tbody id="node-body"></tbody>
+      </table>
       </div>
     </div>
   </div>
@@ -888,6 +1065,22 @@ async function loadStats(){
   document.getElementById('d-users').textContent=_stats.length;
   document.getElementById('u-count').textContent=_stats.length;
   renderUsers(_stats);
+
+  // Top-5 dashboard table
+  const top5=[..._stats].sort((a,b)=>b.total-a.total).slice(0,5);
+  document.getElementById('d-top-users-body').innerHTML=top5.map(r=>`<tr>
+    <td><a href="#" onclick="jumpToJobs('${r.username||''}');return false" style="color:var(--blue);text-decoration:none">${r.username||'—'}</a></td>
+    <td>${r.total}</td>
+    <td><span style="color:var(--green)">${r.done}</span></td>
+    <td>${r.failed?'<span style="color:var(--red)">'+r.failed+'</span>':'<span style="color:var(--text2)">0</span>'}</td>
+    <td style="color:var(--text2);font-size:11px">${fmt(r.last_active)}</td>
+  </tr>`).join('')||'<tr><td colspan="5" style="color:var(--text2);padding:12px">No users</td></tr>';
+
+  // Populate history user dropdown
+  const sel=document.getElementById('hist-user-filter');
+  const prev=sel.value;
+  sel.innerHTML='<option value="">All users</option>'+_stats.map(r=>`<option value="${r.username||''}">${r.username||'(anon)'}</option>`).join('');
+  if(prev)sel.value=prev;
 }
 
 function renderUsers(rows){
@@ -899,8 +1092,37 @@ function renderUsers(rows){
     <td>${r.failed?'<span style="color:var(--red)">'+r.failed+'</span>':'<span style="color:var(--text2)">0</span>'}</td>
     <td><span style="color:var(--text2)">${r.cancelled||0}</span></td>
     <td style="color:var(--text2)">${fmt(r.last_active)}</td>
-    <td><button class="btn sm ghost" onclick="jumpToJobs('${r.username||''}')">Jobs</button></td>
+    <td style="display:flex;gap:4px">
+      <button class="btn sm ghost" onclick="jumpToJobs('${r.username||''}')">Jobs</button>
+      <button class="btn sm ghost" onclick="jumpToHistory('${r.username||''}')">History</button>
+    </td>
   </tr>`).join('')||'<tr><td colspan="8" style="color:var(--text2);padding:14px">No users yet</td></tr>';
+}
+
+let _allNodes = [];
+function filterNodes(){
+  const f = document.getElementById('node-state-filter').value.toLowerCase();
+  const rows = f ? _allNodes.filter(n=>n.state.toLowerCase().includes(f)) : _allNodes;
+  renderNodes(rows);
+}
+function renderNodes(nodes){
+  const stateColor={'idle':'var(--green)','allocated':'var(--blue)','mixed':'var(--orange)','drain':'var(--orange)','down':'var(--red)'};
+  document.getElementById('node-body').innerHTML=nodes.map(n=>{
+    const col=Object.entries(stateColor).find(([k])=>n.state.toLowerCase().includes(k));
+    const color=col?col[1]:'var(--text2)';
+    const memUsed=n.mem_total_mb&&n.mem_free_mb?Math.round((n.mem_total_mb-n.mem_free_mb)/1024):null;
+    const memTotal=n.mem_total_mb?Math.round(n.mem_total_mb/1024):null;
+    return `<tr>
+      <td style="font-family:monospace;font-size:11px">${n.node}</td>
+      <td><span style="color:${color};font-size:11px;font-weight:600">${n.state}</span></td>
+      <td>${n.cpus_alloc}</td>
+      <td style="color:var(--green)">${n.cpus_idle}</td>
+      <td>${n.cpus_total}</td>
+      <td>${memTotal!==null?memTotal+'GB':'—'}</td>
+      <td>${memUsed!==null?memUsed+'GB':'—'}</td>
+      <td style="min-width:100px">${n.cpus_total&&n.cpus_total!='?'?barHTML(n.cpus_alloc,n.cpus_total):'—'}</td>
+    </tr>`;
+  }).join('')||'<tr><td colspan="8" style="color:var(--text2);padding:12px">No node data</td></tr>';
 }
 
 function filterUsers(){
@@ -912,6 +1134,13 @@ function jumpToJobs(u){
   nav('jobs');
   document.getElementById('filter-user').value=u;
   loadJobs();
+}
+
+function jumpToHistory(u){
+  nav('history');
+  const sel=document.getElementById('hist-user-filter');
+  if(sel)sel.value=u;
+  loadHistory();
 }
 
 async function loadPuhti(force=false){
@@ -955,6 +1184,42 @@ async function loadPuhti(force=false){
   document.getElementById('usage-body').innerHTML=(data.monthly_usage||[]).map(r=>`<tr><td>${r.user}</td><td>${r.cpu_hours}</td><td>${r.jobs}</td></tr>`).join()||'<tr><td colspan="3" style="color:var(--text2);padding:10px">No data</td></tr>';
 
   drawPartitionChart('chart-partitions', data.partitions||[]);
+
+  // Node health
+  _allNodes = data.nodes||[];
+  document.getElementById('node-count').textContent=_allNodes.length;
+  filterNodes();
+
+  // GPU nodes
+  document.getElementById('gpu-body').innerHTML=(data.gpu_nodes||[]).map(n=>{
+    const stateCol=n.state.includes('idle')?'var(--green)':n.state.includes('alloc')?'var(--blue)':n.state.includes('drain')||n.state.includes('down')?'var(--red)':'var(--orange)';
+    return `<tr>
+      <td style="font-family:monospace;font-size:11px">${n.node}</td>
+      <td><span style="color:${stateCol}">${n.state}</span></td>
+      <td style="font-size:11px;color:var(--text2)">${n.gres||'—'}</td>
+      <td>${n.cpus_alloc}</td>
+      <td>${n.cpus_total}</td>
+    </tr>`;
+  }).join('')||'<tr><td colspan="5" style="color:var(--text2);padding:12px">No GPU nodes or not available</td></tr>';
+
+  // Pending reasons
+  const pr=data.pending_reasons||[];
+  document.getElementById('pr-count').textContent=pr.reduce((s,r)=>s+r.count,0)||0;
+  document.getElementById('pending-body').innerHTML=pr.map(r=>`<tr>
+    <td style="color:var(--orange)">${r.reason}</td><td>${r.count}</td>
+  </tr>`).join('')||'<tr><td colspan="2" style="color:var(--text2);padding:10px">No pending jobs</td></tr>';
+
+  // Efficiency
+  document.getElementById('eff-body').innerHTML=(data.efficiency||[]).map(r=>{
+    const cls=r.efficiency_pct>80?'':'warn';
+    const color=r.efficiency_pct>80?'var(--green)':r.efficiency_pct>50?'var(--orange)':'var(--red)';
+    return `<tr>
+      <td>${r.user}</td>
+      <td>${r.jobs}</td>
+      <td>${r.cpu_hours_alloc}h</td>
+      <td><div class="bar-wrap"><div class="bar"><div class="bar-fill ${cls}" style="width:${Math.min(r.efficiency_pct,100)}%;background:${color}"></div></div><span class="pct-label">${r.efficiency_pct}%</span></div></td>
+    </tr>`;
+  }).join('')||'<tr><td colspan="4" style="color:var(--text2);padding:10px">No efficiency data yet</td></tr>';
 }
 
 async function loadHistory(){
