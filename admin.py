@@ -454,6 +454,39 @@ def admin_history(days: int = 30, username: str = '', admin_session: str | None 
     return {'history': [dict(r) for r in rows]}
 
 
+@router.get('/today')
+def admin_today(admin_session: str | None = Cookie(default=None)):
+    """Today's stats + hourly job counts for the line chart."""
+    _require_auth(admin_session)
+    with contextlib.closing(_db()) as db:
+        today = db.execute('''
+            SELECT
+                COUNT(*) as total,
+                SUM(CASE WHEN status="done"      THEN 1 ELSE 0 END) as done,
+                SUM(CASE WHEN status="failed"    THEN 1 ELSE 0 END) as failed,
+                SUM(CASE WHEN status="cancelled" THEN 1 ELSE 0 END) as cancelled
+            FROM runs WHERE date(created) = date("now")
+        ''').fetchone()
+        hourly = db.execute('''
+            SELECT CAST(strftime("%H", created) AS INTEGER) as hour, COUNT(*) as count
+            FROM runs WHERE date(created) = date("now")
+            GROUP BY hour ORDER BY hour ASC
+        ''').fetchall()
+        recent_failures = db.execute('''
+            SELECT job_id, slurm_id, username, created
+            FROM runs WHERE status="failed"
+            ORDER BY created DESC LIMIT 6
+        ''').fetchall()
+    hours = [0] * 24
+    for r in hourly:
+        hours[r['hour']] = r['count']
+    return {
+        'today': dict(today),
+        'hourly': hours,
+        'recent_failures': [dict(r) for r in recent_failures],
+    }
+
+
 @router.get('/history-by-user')
 def admin_history_by_user(days: int = 30, admin_session: str | None = Cookie(default=None)):
     """Per-user job totals for the last N days."""
@@ -562,7 +595,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 /* Cards */
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:20px}
 .card{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:14px 16px}
-.card-val{font-size:28px;font-weight:700;line-height:1;margin-bottom:4px}
+.card-val{font-size:22px;font-weight:700;line-height:1;margin-bottom:4px}
+.card-val.lg{font-size:28px}
+.today-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+.today-card{background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:10px 14px;display:flex;align-items:center;gap:10px}
+.today-card-icon{font-size:18px;line-height:1}
+.today-card-val{font-size:20px;font-weight:700;line-height:1}
+.today-card-lbl{font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.4px;margin-top:2px}
 .card-lbl{font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.5px}
 .card-sub{font-size:10px;color:var(--text2);margin-top:3px}
 /* Charts */
@@ -683,26 +722,68 @@ pre.billing{background:var(--bg3);border:1px solid var(--border);border-radius:6
 
   <!-- DASHBOARD -->
   <div class="page active" id="page-dashboard">
-    <div class="cards" id="dash-cards">
+
+    <!-- Today row -->
+    <div class="today-row">
+      <div class="today-card">
+        <div class="today-card-icon">📤</div>
+        <div><div class="today-card-val" id="d-today-total" style="color:var(--blue)">—</div><div class="today-card-lbl">Submitted today</div></div>
+      </div>
+      <div class="today-card">
+        <div class="today-card-icon">✅</div>
+        <div><div class="today-card-val" id="d-today-done" style="color:var(--green)">—</div><div class="today-card-lbl">Completed today</div></div>
+      </div>
+      <div class="today-card">
+        <div class="today-card-icon">❌</div>
+        <div><div class="today-card-val" id="d-today-failed" style="color:var(--red)">—</div><div class="today-card-lbl">Failed today</div></div>
+      </div>
+      <div class="today-card">
+        <div class="today-card-icon">👥</div>
+        <div><div class="today-card-val" id="d-users" style="color:var(--purple)">—</div><div class="today-card-lbl">Total users</div></div>
+      </div>
+    </div>
+
+    <!-- All-time cards -->
+    <div class="cards" id="dash-cards" style="margin-bottom:16px">
       <div class="card"><div class="card-val" id="d-total" style="color:var(--blue)">—</div><div class="card-lbl">Total Jobs</div></div>
       <div class="card"><div class="card-val" id="d-running" style="color:var(--blue)">—</div><div class="card-lbl">Running</div></div>
       <div class="card"><div class="card-val" id="d-queued" style="color:var(--orange)">—</div><div class="card-lbl">Queued</div></div>
       <div class="card"><div class="card-val" id="d-done" style="color:var(--green)">—</div><div class="card-lbl">Completed</div></div>
       <div class="card"><div class="card-val" id="d-failed" style="color:var(--red)">—</div><div class="card-lbl">Failed</div></div>
-      <div class="card"><div class="card-val" id="d-users" style="color:var(--purple)">—</div><div class="card-lbl">Users</div></div>
       <div class="card"><div class="card-val" id="d-scratch" style="color:var(--cyan)">—</div><div class="card-lbl">Scratch Used</div><div class="card-sub">Puhti /scratch</div></div>
       <div class="card"><div class="card-val" id="d-cpu" style="color:var(--orange)">—</div><div class="card-lbl">CPU Hours (month)</div></div>
     </div>
-    <div class="chart-grid">
+
+    <!-- Charts row -->
+    <div class="chart-grid" style="margin-bottom:16px">
+      <div class="chart-box">
+        <div class="chart-title">Today — Hourly Activity <small>jobs submitted per hour</small></div>
+        <canvas id="chart-hourly" height="150"></canvas>
+      </div>
       <div class="chart-box">
         <div class="chart-title">Job History — Last 30 Days <small>by status</small></div>
-        <canvas id="chart-history" height="160"></canvas>
-      </div>
-      <div class="chart-box">
-        <div class="chart-title">Partition Utilization <small>Puhti cluster-wide · CPUs alloc/total</small></div>
-        <canvas id="chart-partitions" height="160"></canvas>
+        <canvas id="chart-history" height="150"></canvas>
       </div>
     </div>
+    <div class="chart-grid" style="margin-bottom:16px">
+      <div class="chart-box">
+        <div class="chart-title">Partition Utilization <small>Puhti cluster-wide · CPUs alloc/total</small></div>
+        <canvas id="chart-partitions" height="150"></canvas>
+      </div>
+      <div class="tbl-box" style="border:none;background:transparent;padding:0">
+        <div class="tbl-box">
+          <div class="tbl-header"><h3>Recent Failures</h3><span class="chip" id="d-fail-count">0</span></div>
+          <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>User</th><th>Slurm</th><th>When</th></tr></thead>
+            <tbody id="d-fail-body"></tbody>
+          </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Active jobs + top users -->
     <div class="two-col" style="margin-bottom:16px">
       <div class="tbl-box">
         <div class="tbl-header"><h3>Active Jobs</h3><span class="chip" id="d-active-count">0</span></div>
@@ -965,7 +1046,7 @@ function nav(name) {
   document.getElementById('page-'+name).classList.add('active');
   const titles={dashboard:'Dashboard',queue:'Live Queue',partitions:'Partitions',jobs:'All Jobs',history:'Job History',users:'Users',containers:'Container Requests',puhti:'Puhti System'};
   document.getElementById('page-title').textContent = titles[name]||name;
-  if(name==='dashboard'){loadStats();loadPuhti();loadHistory();}
+  if(name==='dashboard'){loadToday();loadStats();loadPuhti();loadHistory();}
   if(name==='queue'||name==='partitions')loadPuhti();
   if(name==='jobs')loadJobs();
   if(name==='history')loadHistory();
@@ -1096,7 +1177,105 @@ function drawPartitionChart(canvasId, partitions) {
   });
 }
 
+function drawLineChart(canvasId, hours) {
+  const canvas = document.getElementById(canvasId);
+  if(!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio||1;
+  const W = canvas.offsetWidth||600, H = parseInt(canvas.getAttribute('height'))||150;
+  canvas.width = W*dpr; canvas.height = H*dpr;
+  ctx.scale(dpr,dpr);
+  ctx.clearRect(0,0,W,H);
+
+  const pad={t:12,r:16,b:28,l:36};
+  const cW=W-pad.l-pad.r, cH=H-pad.t-pad.b;
+  const maxVal=Math.max(...hours,1);
+  const now=new Date().getHours();
+
+  // Grid + Y labels
+  ctx.strokeStyle='rgba(48,54,61,0.8)';ctx.lineWidth=1;
+  for(let i=0;i<=4;i++){
+    const y=pad.t+cH*(1-i/4);
+    ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(pad.l+cW,y);ctx.stroke();
+    ctx.fillStyle='#8b949e';ctx.font='9px sans-serif';ctx.textAlign='right';
+    ctx.fillText(Math.round(maxVal*i/4),pad.l-4,y+3);
+  }
+
+  // X labels (every 3h)
+  ctx.fillStyle='#8b949e';ctx.font='9px sans-serif';ctx.textAlign='center';
+  for(let h=0;h<24;h+=3){
+    const x=pad.l+(h/23)*cW;
+    ctx.fillText(`${h}:00`,x,H-pad.b+12);
+  }
+
+  // "Now" vertical line
+  const nowX=pad.l+(now/23)*cW;
+  ctx.strokeStyle='rgba(88,166,255,0.2)';ctx.lineWidth=1;ctx.setLineDash([4,3]);
+  ctx.beginPath();ctx.moveTo(nowX,pad.t);ctx.lineTo(nowX,pad.t+cH);ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle='rgba(88,166,255,0.5)';ctx.font='8px sans-serif';ctx.textAlign='center';
+  ctx.fillText('now',nowX,pad.t-2);
+
+  // Area fill under line
+  const pts=hours.map((v,i)=>({x:pad.l+(i/23)*cW, y:pad.t+cH*(1-v/maxVal)}));
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pad.t+cH);
+  ctx.lineTo(pts[0].x, pts[0].y);
+  for(let i=1;i<pts.length;i++){
+    const cp1x=(pts[i-1].x+pts[i].x)/2, cp1y=pts[i-1].y;
+    const cp2x=(pts[i-1].x+pts[i].x)/2, cp2y=pts[i].y;
+    ctx.bezierCurveTo(cp1x,cp1y,cp2x,cp2y,pts[i].x,pts[i].y);
+  }
+  ctx.lineTo(pts[pts.length-1].x, pad.t+cH);
+  ctx.closePath();
+  const grad=ctx.createLinearGradient(0,pad.t,0,pad.t+cH);
+  grad.addColorStop(0,'rgba(88,166,255,0.25)');
+  grad.addColorStop(1,'rgba(88,166,255,0.02)');
+  ctx.fillStyle=grad;
+  ctx.fill();
+
+  // Line
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x,pts[0].y);
+  for(let i=1;i<pts.length;i++){
+    const cp1x=(pts[i-1].x+pts[i].x)/2, cp1y=pts[i-1].y;
+    const cp2x=(pts[i-1].x+pts[i].x)/2, cp2y=pts[i].y;
+    ctx.bezierCurveTo(cp1x,cp1y,cp2x,cp2y,pts[i].x,pts[i].y);
+  }
+  ctx.strokeStyle='#58a6ff';ctx.lineWidth=2;ctx.stroke();
+
+  // Dots for non-zero hours
+  hours.forEach((v,i)=>{
+    if(v===0)return;
+    const x=pad.l+(i/23)*cW, y=pad.t+cH*(1-v/maxVal);
+    ctx.beginPath();ctx.arc(x,y,3,0,Math.PI*2);
+    ctx.fillStyle='#58a6ff';ctx.fill();
+    ctx.fillStyle='#e6edf3';ctx.font='9px sans-serif';ctx.textAlign='center';
+    ctx.fillText(v,x,y-6);
+  });
+}
+
 // ── Data loaders ──────────────────────────────────────────────────────────────
+async function loadToday(){
+  const data=await api('/admin/today');
+  if(!data)return;
+  const t=data.today||{};
+  document.getElementById('d-today-total').textContent=t.total||0;
+  document.getElementById('d-today-done').textContent=t.done||0;
+  document.getElementById('d-today-failed').textContent=t.failed||0;
+
+  const fails=data.recent_failures||[];
+  document.getElementById('d-fail-count').textContent=fails.length;
+  document.getElementById('d-fail-body').innerHTML=fails.map(r=>`<tr>
+    <td><a href="#" onclick="jumpToJobs('${r.username||''}');return false" style="color:var(--blue);text-decoration:none">${r.username||'—'}</a></td>
+    <td style="font-family:monospace;font-size:10px">${r.slurm_id||'—'}</td>
+    <td style="color:var(--text2);font-size:11px">${fmt(r.created)}</td>
+  </tr>`).join('')||'<tr><td colspan="3" style="color:var(--text2);padding:10px">No recent failures</td></tr>';
+
+  _hourlyData=data.hourly||new Array(24).fill(0);
+  drawLineChart('chart-hourly', _hourlyData);
+}
+
 async function loadStats(){
   const data=await api('/admin/stats');
   if(!data)return;
@@ -1412,14 +1591,14 @@ async function loadContainerRequests(){
 
 function refreshAll(){
   document.getElementById('refresh-ts').textContent='Refreshing…';
-  Promise.all([loadStats(),loadPuhti(true),loadHistory(),loadContainerRequests()]).then(()=>{
+  Promise.all([loadToday(),loadStats(),loadPuhti(true),loadHistory(),loadContainerRequests()]).then(()=>{
     document.getElementById('refresh-ts').textContent='Updated '+new Date().toLocaleTimeString();
   });
 }
 
 setInterval(()=>{
   const id=document.querySelector('.page.active')?.id;
-  if(id==='page-dashboard'){loadStats();loadPuhti();loadHistory();}
+  if(id==='page-dashboard'){loadToday();loadStats();loadPuhti();loadHistory();}
   if(id==='page-queue'||id==='page-partitions')loadPuhti();
   if(id==='page-jobs')loadJobs();
   if(id==='page-history')loadHistory();
@@ -1428,13 +1607,15 @@ setInterval(()=>{
   if(id==='page-puhti')loadPuhti();
 },900000);
 
+let _hourlyData=new Array(24).fill(0);
 window.addEventListener('resize',()=>{
   if(_history.length)drawHistoryChart('chart-history',_history);
   if(_puhti.partitions)drawPartitionChart('chart-partitions',_puhti.partitions);
+  drawLineChart('chart-hourly',_hourlyData);
 });
 
 // Initial load
-loadStats();loadPuhti();loadHistory();loadContainerRequests();
+loadToday();loadStats();loadPuhti();loadHistory();loadContainerRequests();
 document.getElementById('refresh-ts').textContent='Updated '+new Date().toLocaleTimeString();
 </script>
 </body></html>'''
