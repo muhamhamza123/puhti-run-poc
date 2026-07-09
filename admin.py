@@ -1586,6 +1586,9 @@ async function loadHistory(){
   const daysEl=document.getElementById('hist-days-filter');
   const user=userEl?userEl.value:'';
   const days=daysEl?daysEl.value:'30';
+  // Persist filters in URL hash so bookmarks/sharing works
+  const hash='#history'+(user?'&u='+encodeURIComponent(user):'')+(days&&days!=='30'?'&d='+days:'');
+  history.replaceState(null,'',hash);
   let path=`/admin/history?days=${days}`;
   if(user)path+=`&username=${encodeURIComponent(user)}`;
   const data=await api(path);
@@ -1794,6 +1797,25 @@ window.addEventListener('resize',()=>{
   drawLineChart('chart-hourly',_hourlyData);
   renderHistChart(_histMode);
 });
+
+// Restore history filters from URL hash on load (e.g. #history&u=alice&d=90)
+(function(){
+  const h=location.hash;
+  if(h.startsWith('#history')){
+    const params=new URLSearchParams(h.slice(1).replace(/^history&?/,''));
+    const u=params.get('u'),d=params.get('d');
+    const userEl=document.getElementById('hist-user-filter');
+    const daysEl=document.getElementById('hist-days-filter');
+    if(u&&userEl){
+      // add option if not already present
+      if(![...userEl.options].find(o=>o.value===u)){const o=document.createElement('option');o.value=o.textContent=u;userEl.appendChild(o);}
+      userEl.value=u;
+    }
+    if(d&&daysEl)daysEl.value=d;
+    // navigate to history page
+    document.querySelector('[data-page="history"]')?.click();
+  }
+})();
 
 // Initial load
 loadToday();loadStats();loadPuhti();loadHistory();loadContainerRequests();

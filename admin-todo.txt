@@ -75,10 +75,9 @@ Last updated: 2026-07-09
 🟢 NICE TO HAVE
 ----------------
 
-13. Email on failure does not include the error
-    File: api_run_endpoint.py — _send_email() calls on failure
-    The failure email says "click Log to see the error" but does not include
-    the actual stderr content. Including it would reduce support requests.
+13. [DONE] Email on failure does not include the error
+    Both failure email sites in api_run_endpoint.py now read stderr.txt
+    (last 50 lines) and include it in the email body if non-empty.
 
 14. [DONE] No notification when container build finishes
     Background thread polls every 10 min for merged container requests.
@@ -90,12 +89,9 @@ Last updated: 2026-07-09
     JupyterLab submit tab shows "Project BUs remaining: N" above Run button.
     Turns amber when below 500 BUs.
 
-16. History chart filter has no URL state
-    File: admin.py — _ADMIN_HTML history page JS
-    The username and days filters reset on every page reload. Not critical but
-    makes it impossible to share a filtered view or bookmark a specific user.
+16. [DONE] History chart filter has no URL state
+    loadHistory() now writes #history&u=<user>&d=<days> to the URL hash.
+    On page load the hash is parsed and filters + page are restored.
 
-17. Dead code in repo root
-    Files: run_button_widget.py, demo_user_script.py
-    These appear to be unused leftover files from early prototyping.
-    Confirm they are not referenced anywhere then delete before open-sourcing.
+17. [DONE] Dead code in repo root
+    run_button_widget.py and demo_user_script.py deleted (git rm).

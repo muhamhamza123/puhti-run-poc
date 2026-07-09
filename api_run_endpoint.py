@@ -424,9 +424,11 @@ def my_jobs_status(username: str, x_jupyterhub_token: Optional[str] = Header(Non
                             f'Your Puhti job has finished successfully.\n\nJob ID:   {job["job_id"]}\nSlurm ID: {slurm_id}\n\n'
                             f'Open JupyterLab → Jobs tab → click "↓ Get" to save results to your files.')
                     else:
+                        stderr = _read_tail(os.path.join(NFS_RUNS, job['job_id'], 'stderr.txt'), lines=50)
                         _send_email(email, f'Puhti job {slurm_id} failed ✗',
                             f'Your Puhti job failed.\n\nJob ID:   {job["job_id"]}\nSlurm ID: {slurm_id}\n\n'
-                            f'Open JupyterLab → Jobs tab → click "📋 Log" to see the error output.\n'
+                            + (f'--- Error output ---\n{stderr}\n\n' if stderr.strip() else '')
+                            + f'Open JupyterLab → Jobs tab → click "📋 Log" to see the full output.\n'
                             f'You can resubmit with the "↺ Resubmit" button.')
 
     return {'jobs': jobs}
@@ -483,11 +485,13 @@ def run_status(job_id: str):
                     f'Job ID:   {job_id}\nSlurm ID: {slurm_id}\n\n'
                     f'Open JupyterLab → Jobs tab → click "↓ Get" to save results to your files.')
             else:
+                stderr = _read_tail(os.path.join(NFS_RUNS, job_id, 'stderr.txt'), lines=50)
                 _send_email(email,
                     f'Puhti job {slurm_id} failed ✗',
                     f'Your Puhti job failed.\n\n'
                     f'Job ID:   {job_id}\nSlurm ID: {slurm_id}\n\n'
-                    f'Open JupyterLab → Jobs tab → click "📋 Log" to see the error output.\n'
+                    + (f'--- Error output ---\n{stderr}\n\n' if stderr.strip() else '')
+                    + f'Open JupyterLab → Jobs tab → click "📋 Log" to see the full output.\n'
                     f'You can resubmit with the "↺ Resubmit" button.')
 
     return {'job_id': job_id, 'slurm_id': job['slurm_id'], 'status': new_status}
