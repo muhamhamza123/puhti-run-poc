@@ -106,9 +106,6 @@
 ## Known Gaps / Future Work
 
 - **Admin panel** — job history across all users, quota management, container request approval UI (planned)
-- **Scratch cleanup** — no cron to delete old job dirs on Puhti scratch (`/scratch/project_2014823/runs/{user}/{job}/`); will fill disk with 100+ users
-- **NFS cleanup** — no cron to delete old job dirs on head node (`/data/hbv/runs/`)
-- **SQLite WAL mode** — under 4 uvicorn workers with concurrent writes, SQLite can lock; add WAL pragma + connection timeout before going to 100 users
 - **SQLite → PostgreSQL** — at ~50+ concurrent users SQLite becomes a bottleneck
 - **CSC billing quota per user** — no per-user cap on Slurm hours; one user can drain project_2014823 billing units
 - **Health monitoring/alerting** — no automated alert if the API goes down
