@@ -927,6 +927,9 @@ pre.billing{background:var(--bg3);border:1px solid var(--border);border-radius:6
             <option>idle</option><option>allocated</option><option>mixed</option>
             <option>drain</option><option>down</option>
           </select>
+          <button class="btn sm ghost" id="node-prev" onclick="nodePage(-1)">◀</button>
+          <span id="node-page-label" style="font-size:11px;color:var(--text2)">—</span>
+          <button class="btn sm ghost" id="node-next" onclick="nodePage(1)">▶</button>
         </div>
       </div>
       <div class="tbl-wrap">
@@ -1140,6 +1143,9 @@ function renderUsers(rows){
 }
 
 let _allNodes = [];
+let _filteredNodes = [];
+let _nodePage = 0;
+const _NODE_PAGE_SIZE = 15;
 let _allGpuNodes = [];
 let _gpuPage = 0;
 const _GPU_PAGE_SIZE = 10;
@@ -1168,14 +1174,26 @@ function renderGpuPage(){
   }).join('')||'<tr><td colspan="5" style="color:var(--text2);padding:12px">No GPU nodes or not available</td></tr>';
 }
 
-function filterNodes(){
-  const f = document.getElementById('node-state-filter').value.toLowerCase();
-  const rows = f ? _allNodes.filter(n=>n.state.toLowerCase().includes(f)) : _allNodes;
-  renderNodes(rows);
+function nodePage(dir){
+  const pages=Math.ceil(_filteredNodes.length/_NODE_PAGE_SIZE)||1;
+  _nodePage=Math.max(0,Math.min(_nodePage+dir,pages-1));
+  renderNodePage();
 }
-function renderNodes(nodes){
+function filterNodes(){
+  const f=document.getElementById('node-state-filter').value.toLowerCase();
+  _filteredNodes=f?_allNodes.filter(n=>n.state.toLowerCase().includes(f)):_allNodes;
+  _nodePage=0;
+  renderNodePage();
+}
+function renderNodePage(){
+  const pages=Math.ceil(_filteredNodes.length/_NODE_PAGE_SIZE)||1;
+  const start=_nodePage*_NODE_PAGE_SIZE;
+  const slice=_filteredNodes.slice(start,start+_NODE_PAGE_SIZE);
+  document.getElementById('node-page-label').textContent=`${_nodePage+1} / ${pages}`;
+  document.getElementById('node-prev').disabled=_nodePage===0;
+  document.getElementById('node-next').disabled=_nodePage>=pages-1;
   const stateColor={'idle':'var(--green)','allocated':'var(--blue)','mixed':'var(--orange)','drain':'var(--orange)','down':'var(--red)'};
-  document.getElementById('node-body').innerHTML=nodes.map(n=>{
+  document.getElementById('node-body').innerHTML=slice.map(n=>{
     const col=Object.entries(stateColor).find(([k])=>n.state.toLowerCase().includes(k));
     const color=col?col[1]:'var(--text2)';
     const memUsed=n.mem_total_mb&&n.mem_free_mb?Math.round((n.mem_total_mb-n.mem_free_mb)/1024):null;
