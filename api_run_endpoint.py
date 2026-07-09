@@ -349,6 +349,8 @@ def my_jobs_status(username: str, x_jupyterhub_token: Optional[str] = Header(Non
                 new_status = 'running'
 
             if new_status != job['status']:
+                _log.info('job_status_change job_id=%s slurm_id=%s %s->%s',
+                          job['job_id'], job['slurm_id'], job['status'], new_status)
                 _set_status(job['job_id'], new_status)
                 job['status'] = new_status
                 if new_status in ('done', 'failed'):
@@ -711,6 +713,7 @@ def _check_rate_limit(request: Request):
         # keep only hits in the last 60s
         _rate_hits[ip] = [t for t in hits if now - t < 60]
         if len(_rate_hits[ip]) >= _RATE_LIMIT:
+            _log.warning('rate_limit_hit ip=%s', ip)
             raise HTTPException(429, f'Too many requests. Max {_RATE_LIMIT} submissions per minute.')
         _rate_hits[ip].append(now)
 
@@ -787,10 +790,13 @@ async def _submit_job(job_id: str, job_dir: str, partition: str,
     )
     r = _ssh(cmd, timeout=30)
     if r.returncode != 0:
+        _log.error('sbatch_failed user=%s job_id=%s stderr=%s', username or 'anon', job_id, r.stderr.strip())
         raise HTTPException(500, f'sbatch failed: {r.stderr.strip()}')
 
     slurm_id = r.stdout.strip().split()[-1]
     _insert(job_id, slurm_id, partition, username, email, cpus, memory_gb)
+    _log.info('job_submitted user=%s job_id=%s slurm_id=%s partition=%s cpus=%d mem=%dG time=%sh',
+              username or 'anon', job_id, slurm_id, partition, cpus, memory_gb, time_hours)
     return {'job_id': job_id, 'slurm_id': slurm_id, 'status': 'queued'}
 
 
