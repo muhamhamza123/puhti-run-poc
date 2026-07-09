@@ -574,16 +574,14 @@ def run_logs(job_id: str):
         raise HTTPException(404, 'Job not found')
 
     local_job  = os.path.join(NFS_RUNS, job_id)
-    user_slug  = re.sub(r'[^a-z0-9_-]', '_', (job.get('username') or '').lower()) or 'anonymous'
-    remote_dir = f'{PUHTI_RUNS}/{user_slug}/{job_id}'
-    try:
-        for fname in ('stdout.txt', 'stderr.txt'):
-            _rsync_from(
-                f'{remote_dir}/{fname}',
-                local_job + '/',
-            )
-    except Exception:
-        pass
+    if job['status'] in ('queued', 'running'):
+        user_slug  = re.sub(r'[^a-z0-9_-]', '_', (job.get('username') or '').lower()) or 'anonymous'
+        remote_dir = f'{PUHTI_RUNS}/{user_slug}/{job_id}'
+        try:
+            for fname in ('stdout.txt', 'stderr.txt'):
+                _rsync_from(f'{remote_dir}/{fname}', local_job + '/')
+        except Exception:
+            pass
 
     return {
         'stdout': _read_tail(os.path.join(local_job, 'stdout.txt')),
