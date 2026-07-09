@@ -112,7 +112,7 @@ def callback(code: str = ''):
         orgs = _gh_api('/user/orgs', access_token)
         org_names = [o['login'].lower() for o in orgs]
         if GITHUB_ORG.lower() not in org_names:
-            raise HTTPException(403, f'You are not a member of the {GITHUB_ORG} GitHub organisation')
+            raise HTTPException(403, f'User {username!r} is not a member of {GITHUB_ORG}. Orgs visible: {org_names}')
     except HTTPException:
         raise
     except Exception as e:
