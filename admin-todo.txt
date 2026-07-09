@@ -80,16 +80,15 @@ Last updated: 2026-07-09
     The failure email says "click Log to see the error" but does not include
     the actual stderr content. Including it would reduce support requests.
 
-14. No notification when container build finishes
-    File: apptainer/ + api_run_endpoint.py /request-container-simple
-    When a PR is merged the .sif build on Puhti is manual. No webhook or
-    notification tells the user when their container is actually ready to use.
+14. [DONE] No notification when container build finishes
+    Background thread polls every 10 min for merged container requests.
+    When .sif appears on Puhti, status updated to 'ready' and email sent.
+    email column added to container_requests table; extension passes email.
 
-15. No billing quota warning to users
-    File: api_run_endpoint.py _submit_job()
-    When csc-projects billing units drop below a threshold, users should see
-    a warning in JupyterLab before submitting rather than discovering it when
-    jobs start failing.
+15. [DONE] No billing quota warning to users
+    /billing endpoint added — parses csc-projects BU remaining via SSH.
+    JupyterLab submit tab shows "Project BUs remaining: N" above Run button.
+    Turns amber when below 500 BUs.
 
 16. History chart filter has no URL state
     File: admin.py — _ADMIN_HTML history page JS
