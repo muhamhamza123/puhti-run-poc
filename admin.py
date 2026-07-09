@@ -426,31 +426,27 @@ def admin_puhti(admin_session: str | None = Cookie(default=None)):
 
 @router.get('/history')
 def admin_history(days: int = 30, username: str = '', admin_session: str | None = Cookie(default=None)):
-    """Job counts per day for the last N days, grouped by status. Optional username filter."""
+    """Job counts + resource usage per day for the last N days."""
     _require_auth(admin_session)
+    where = 'created >= date("now", ?)'
+    params: list = [f'-{days} days']
+    if username:
+        where += ' AND username=?'
+        params.append(username)
     with contextlib.closing(_db()) as db:
-        if username:
-            rows = db.execute('''
-                SELECT date(created) as day,
-                       SUM(CASE WHEN status="done"      THEN 1 ELSE 0 END) as done,
-                       SUM(CASE WHEN status="failed"    THEN 1 ELSE 0 END) as failed,
-                       SUM(CASE WHEN status="cancelled" THEN 1 ELSE 0 END) as cancelled,
-                       COUNT(*) as total
-                FROM runs
-                WHERE created >= date("now", ?) AND username=?
-                GROUP BY day ORDER BY day ASC
-            ''', (f'-{days} days', username)).fetchall()
-        else:
-            rows = db.execute('''
-                SELECT date(created) as day,
-                       SUM(CASE WHEN status="done"      THEN 1 ELSE 0 END) as done,
-                       SUM(CASE WHEN status="failed"    THEN 1 ELSE 0 END) as failed,
-                       SUM(CASE WHEN status="cancelled" THEN 1 ELSE 0 END) as cancelled,
-                       COUNT(*) as total
-                FROM runs
-                WHERE created >= date("now", ?)
-                GROUP BY day ORDER BY day ASC
-            ''', (f'-{days} days',)).fetchall()
+        rows = db.execute(f'''
+            SELECT date(created) as day,
+                   SUM(CASE WHEN status="done"      THEN 1 ELSE 0 END) as done,
+                   SUM(CASE WHEN status="failed"    THEN 1 ELSE 0 END) as failed,
+                   SUM(CASE WHEN status="cancelled" THEN 1 ELSE 0 END) as cancelled,
+                   COUNT(*) as total,
+                   COALESCE(SUM(cpus), 0) as total_cpus,
+                   COALESCE(SUM(memory_gb), 0) as total_ram_gb,
+                   SUM(CASE WHEN LOWER(partition) LIKE "%gpu%" THEN 1 ELSE 0 END) as gpu_jobs
+            FROM runs
+            WHERE {where}
+            GROUP BY day ORDER BY day ASC
+        ''', params).fetchall()
     return {'history': [dict(r) for r in rows]}
 
 
@@ -901,14 +897,22 @@ pre.billing{background:var(--bg3);border:1px solid var(--border);border-radius:6
       <div class="card"><div class="card-val" id="h-rate" style="color:var(--cyan)">—</div><div class="card-lbl">Success Rate</div></div>
     </div>
     <div class="chart-box" style="margin-bottom:16px">
-      <div class="chart-title">Daily Job Activity <small id="hist-chart-label">last 30 days — all users</small></div>
+      <div class="chart-title">
+        Daily Activity <small id="hist-chart-label">last 30 days — all users</small>
+        <span style="display:flex;gap:4px;margin-left:auto">
+          <button class="btn sm" id="chart-tab-jobs" onclick="switchHistChart('jobs')" style="background:var(--blue);color:#0d1117">Jobs</button>
+          <button class="btn sm ghost" id="chart-tab-cpu" onclick="switchHistChart('cpu')">CPUs</button>
+          <button class="btn sm ghost" id="chart-tab-ram" onclick="switchHistChart('ram')">RAM</button>
+          <button class="btn sm ghost" id="chart-tab-gpu" onclick="switchHistChart('gpu')">GPU Jobs</button>
+        </span>
+      </div>
       <canvas id="chart-history2" height="180"></canvas>
     </div>
     <div class="tbl-box">
       <div class="tbl-header"><h3>Daily Breakdown</h3></div>
       <div class="tbl-wrap">
       <table>
-        <thead><tr><th>Date</th><th>Total</th><th>Done</th><th>Failed</th><th>Cancelled</th><th>Success Rate</th></tr></thead>
+        <thead><tr><th>Date</th><th>Total</th><th>Done</th><th>Failed</th><th>Cancelled</th><th>Success Rate</th><th>CPUs Req.</th><th>RAM (GB)</th><th>GPU Jobs</th></tr></thead>
         <tbody id="history-body"></tbody>
       </table>
       </div>
@@ -1530,7 +1534,6 @@ async function loadHistory(){
   });
 
   document.getElementById('history-body').innerHTML=[..._history].reverse().map(r=>{
-    const rt=r.total?Math.round(r.done/r.total*100):0;
     return `<tr>
       <td>${fmtDate(r.day)}</td>
       <td>${r.total}</td>
@@ -1538,11 +1541,14 @@ async function loadHistory(){
       <td>${r.failed?'<span style="color:var(--red)">'+r.failed+'</span>':'0'}</td>
       <td><span style="color:var(--text2)">${r.cancelled}</span></td>
       <td>${barHTML(r.done,r.total)}</td>
+      <td style="color:var(--blue)">${r.total_cpus||0}</td>
+      <td style="color:var(--purple)">${r.total_ram_gb||0}GB</td>
+      <td style="color:var(--green)">${r.gpu_jobs||0}</td>
     </tr>`;
-  }).join()||'<tr><td colspan="6" style="color:var(--text2);padding:12px">No history yet</td></tr>';
+  }).join()||'<tr><td colspan="9" style="color:var(--text2);padding:12px">No history yet</td></tr>';
 
   drawHistoryChart('chart-history',_history);
-  drawHistoryChart('chart-history2',_history);
+  renderHistChart(_histMode||'jobs');
 
   // Per-user breakdown for the same period (only on History page)
   const hbuBody=document.getElementById('hbu-body');
@@ -1627,10 +1633,117 @@ setInterval(()=>{
 },900000);
 
 let _hourlyData=new Array(24).fill(0);
+let _histMode='jobs';
+
+function switchHistChart(mode){
+  _histMode=mode;
+  ['jobs','cpu','ram','gpu'].forEach(m=>{
+    const btn=document.getElementById('chart-tab-'+m);
+    if(!btn)return;
+    if(m===mode){btn.className='btn sm';btn.style.background='var(--blue)';btn.style.color='#0d1117';}
+    else{btn.className='btn sm ghost';btn.style.background='';btn.style.color='';}
+  });
+  renderHistChart(mode);
+}
+
+function renderHistChart(mode){
+  if(!_history.length)return;
+  if(mode==='jobs'){
+    drawHistoryChart('chart-history2',_history);
+    return;
+  }
+  const labels={'cpu':'CPUs Requested','ram':'RAM Requested (GB)','gpu':'GPU Jobs'};
+  const colors={'cpu':'#58a6ff','ram':'#bc8cff','gpu':'#39d353'};
+  const key={'cpu':'total_cpus','ram':'total_ram_gb','gpu':'gpu_jobs'};
+  drawResourceLineChart('chart-history2',_history,key[mode],labels[mode],colors[mode]);
+}
+
+function drawResourceLineChart(canvasId, data, field, label, color){
+  const canvas=document.getElementById(canvasId);
+  if(!canvas)return;
+  const ctx=canvas.getContext('2d');
+  const dpr=window.devicePixelRatio||1;
+  const W=canvas.offsetWidth||600, H=parseInt(canvas.getAttribute('height'))||180;
+  canvas.width=W*dpr; canvas.height=H*dpr;
+  ctx.scale(dpr,dpr);
+  ctx.clearRect(0,0,W,H);
+
+  const vals=data.map(d=>d[field]||0);
+  const maxVal=Math.max(...vals,1);
+  const pad={t:16,r:16,b:30,l:50};
+  const cW=W-pad.l-pad.r, cH=H-pad.t-pad.b;
+
+  // Grid
+  ctx.strokeStyle='rgba(48,54,61,0.8)';ctx.lineWidth=1;
+  for(let i=0;i<=4;i++){
+    const y=pad.t+cH*(1-i/4);
+    ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(pad.l+cW,y);ctx.stroke();
+    ctx.fillStyle='#8b949e';ctx.font='9px sans-serif';ctx.textAlign='right';
+    ctx.fillText(Math.round(maxVal*i/4),pad.l-4,y+3);
+  }
+
+  if(!vals.some(v=>v>0)){
+    ctx.fillStyle='#8b949e';ctx.font='12px sans-serif';ctx.textAlign='center';
+    ctx.fillText('No '+label+' data yet (cpus/ram stored from new jobs)',W/2,H/2);
+    return;
+  }
+
+  const pts=data.map((d,i)=>({x:pad.l+(i/(data.length-1||1))*cW, y:pad.t+cH*(1-(d[field]||0)/maxVal)}));
+
+  // Area
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x,pad.t+cH);
+  ctx.lineTo(pts[0].x,pts[0].y);
+  for(let i=1;i<pts.length;i++){
+    const cpx=(pts[i-1].x+pts[i].x)/2;
+    ctx.bezierCurveTo(cpx,pts[i-1].y,cpx,pts[i].y,pts[i].x,pts[i].y);
+  }
+  ctx.lineTo(pts[pts.length-1].x,pad.t+cH);
+  ctx.closePath();
+  const grad=ctx.createLinearGradient(0,pad.t,0,pad.t+cH);
+  grad.addColorStop(0,color.replace(')',',0.25)').replace('rgb','rgba'));
+  grad.addColorStop(1,color.replace(')',',0.03)').replace('rgb','rgba'));
+  // simple opacity approach
+  ctx.globalAlpha=0.2;ctx.fillStyle=color;ctx.fill();ctx.globalAlpha=1;
+
+  // Line
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x,pts[0].y);
+  for(let i=1;i<pts.length;i++){
+    const cpx=(pts[i-1].x+pts[i].x)/2;
+    ctx.bezierCurveTo(cpx,pts[i-1].y,cpx,pts[i].y,pts[i].x,pts[i].y);
+  }
+  ctx.strokeStyle=color;ctx.lineWidth=2;ctx.stroke();
+
+  // Dots + labels
+  pts.forEach((p,i)=>{
+    const v=vals[i];
+    ctx.beginPath();ctx.arc(p.x,p.y,3,0,Math.PI*2);
+    ctx.fillStyle=color;ctx.fill();
+    if(v>0){ctx.fillStyle='#e6edf3';ctx.font='9px sans-serif';ctx.textAlign='center';ctx.fillText(v,p.x,p.y-6);}
+  });
+
+  // X date labels every Nth
+  const step=Math.max(1,Math.floor(data.length/8));
+  ctx.fillStyle='#8b949e';ctx.font='9px sans-serif';ctx.textAlign='center';
+  data.forEach((d,i)=>{
+    if(i%step===0){
+      const parts=d.day.split('-');
+      ctx.fillText(`${parts[1]}/${parts[2]}`,pts[i].x,H-pad.b+12);
+    }
+  });
+
+  // Legend
+  ctx.fillStyle=color;ctx.fillRect(W-120,6,10,8);
+  ctx.fillStyle='#8b949e';ctx.font='9px sans-serif';ctx.textAlign='left';
+  ctx.fillText(label,W-107,13);
+}
+
 window.addEventListener('resize',()=>{
   if(_history.length)drawHistoryChart('chart-history',_history);
   if(_puhti.partitions)drawPartitionChart('chart-partitions',_puhti.partitions);
   drawLineChart('chart-hourly',_hourlyData);
+  renderHistChart(_histMode);
 });
 
 // Initial load
