@@ -2,7 +2,8 @@
 Complete /run-code API router — submit, status, logs, results.
 """
 import io, os, uuid, shutil, subprocess, sqlite3, zipfile, contextlib, base64, re
-import urllib.request, urllib.error, json
+import urllib.request, urllib.error, json, smtplib
+from email.mime.text import MIMEText
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Header
 from fastapi.responses import StreamingResponse
 from typing import Optional
@@ -21,9 +22,12 @@ VALID_PARTITIONS  = {'small', 'large', 'longrun', 'gpu', 'gpumedium'}
 GPU_PARTITIONS    = {'gpu', 'gpumedium'}
 DEFAULT_CONTAINER = 'general-compute'
 
-GITHUB_TOKEN  = os.environ.get('GITHUB_TOKEN', '')
-GITHUB_REPO   = os.environ.get('GITHUB_REPO', 'muhamhamza123/puhti-run-poc')
+GITHUB_TOKEN   = os.environ.get('GITHUB_TOKEN', '')
+GITHUB_REPO    = os.environ.get('GITHUB_REPO', 'muhamhamza123/puhti-run-poc')
 JUPYTERHUB_URL = os.environ.get('JUPYTERHUB_URL', 'https://diwa-data-lab-vre.rahtiapp.fi')
+SMTP_HOST      = os.environ.get('SMTP_HOST', 'smtp.csc.fi')
+SMTP_PORT      = int(os.environ.get('SMTP_PORT', '25'))
+EMAIL_FROM     = os.environ.get('EMAIL_FROM', 'puhti-runner@hbv.we3data.com')
 
 
 def _validate_jupyterhub_token(token: str) -> str:
@@ -69,19 +73,35 @@ def _db():
             created      TEXT DEFAULT (datetime('now'))
         )
     """)
-    # migrate existing tables that lack username column
     cols = [r[1] for r in conn.execute("PRAGMA table_info(runs)").fetchall()]
     if 'username' not in cols:
         conn.execute("ALTER TABLE runs ADD COLUMN username TEXT DEFAULT ''")
+    if 'email' not in cols:
+        conn.execute("ALTER TABLE runs ADD COLUMN email TEXT DEFAULT ''")
     conn.commit()
     return conn
 
 
-def _insert(job_id, slurm_id, partition, username=''):
+def _insert(job_id, slurm_id, partition, username='', email=''):
     with contextlib.closing(_db()) as db:
-        db.execute("INSERT INTO runs (job_id, slurm_id, partition, username) VALUES (?,?,?,?)",
-                   (job_id, slurm_id, partition, username))
+        db.execute("INSERT INTO runs (job_id, slurm_id, partition, username, email) VALUES (?,?,?,?,?)",
+                   (job_id, slurm_id, partition, username, email))
         db.commit()
+
+
+def _send_email(to: str, subject: str, body: str) -> None:
+    if not to:
+        return
+    try:
+        msg = MIMEText(body)
+        msg['Subject'] = subject
+        msg['From'] = EMAIL_FROM
+        msg['To'] = to
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as s:
+            s.sendmail(EMAIL_FROM, [to], msg.as_string())
+    except Exception as e:
+        import logging
+        logging.getLogger('puhti-run').error(f'Email to {to} failed: {e}')
 
 
 def _get(job_id):
@@ -161,6 +181,7 @@ async def run_notebook(
     memory_gb:    int = Form(16),
     container:    str = Form(DEFAULT_CONTAINER),
     username:     str = Form(''),
+    email:        str = Form(''),
     x_jupyterhub_token: Optional[str] = Header(None),
 ):
     """Accept a .ipynb file, convert it to script.py on the head node, then submit."""
@@ -174,7 +195,6 @@ async def run_notebook(
     job_dir = os.path.join(NFS_RUNS, job_id)
     os.makedirs(job_dir, exist_ok=True)
 
-    # Save notebook
     nb_path = os.path.join(job_dir, notebook.filename or 'notebook.ipynb')
     _write_upload(notebook, nb_path)
     if requirements:
@@ -193,7 +213,7 @@ async def run_notebook(
     # Strip ipython magic lines that won't run as plain python
     _strip_magics(script_path)
 
-    return await _submit_job(job_id, job_dir, partition, cpus, memory_gb, container, username)
+    return await _submit_job(job_id, job_dir, partition, cpus, memory_gb, container, username, email)
 
 
 @router.post('/run-code')
@@ -205,6 +225,7 @@ async def run_code(
     memory_gb:    int = Form(16),
     container:    str = Form(DEFAULT_CONTAINER),
     username:     str = Form(''),
+    email:        str = Form(''),
     x_jupyterhub_token: Optional[str] = Header(None),
 ):
     if partition not in VALID_PARTITIONS:
@@ -222,7 +243,7 @@ async def run_code(
     if requirements:
         _write_upload(requirements, os.path.join(job_dir, 'requirements.txt'))
 
-    return await _submit_job(job_id, job_dir, partition, cpus, memory_gb, container, username)
+    return await _submit_job(job_id, job_dir, partition, cpus, memory_gb, container, username, email)
 
 
 @router.get('/my-jobs/{username}')
@@ -278,6 +299,22 @@ def run_status(job_id: str):
 
     if new_status != job['status']:
         _set_status(job_id, new_status)
+        if new_status in ('done', 'failed'):
+            email = job.get('email', '')
+            slurm_id = job['slurm_id']
+            if new_status == 'done':
+                _send_email(email,
+                    f'Puhti job {slurm_id} completed ✓',
+                    f'Your Puhti job has finished successfully.\n\n'
+                    f'Job ID:   {job_id}\nSlurm ID: {slurm_id}\n\n'
+                    f'Open JupyterLab → Jobs tab → click "↓ Get" to save results to your files.')
+            else:
+                _send_email(email,
+                    f'Puhti job {slurm_id} failed ✗',
+                    f'Your Puhti job failed.\n\n'
+                    f'Job ID:   {job_id}\nSlurm ID: {slurm_id}\n\n'
+                    f'Open JupyterLab → Jobs tab → click "📋 Log" to see the error output.\n'
+                    f'You can resubmit with the "↺ Resubmit" button.')
 
     return {'job_id': job_id, 'slurm_id': job['slurm_id'], 'status': new_status}
 
@@ -591,6 +628,7 @@ async def resubmit_job(job_id: str, x_jupyterhub_token: Optional[str] = Header(N
         params = json.load(f)
 
     username = params.get('username', job.get('username', ''))
+    email    = params.get('email', job.get('email', ''))
     if x_jupyterhub_token:
         username = _validate_jupyterhub_token(x_jupyterhub_token)
 
@@ -604,21 +642,21 @@ async def resubmit_job(job_id: str, x_jupyterhub_token: Optional[str] = Header(N
         new_job_id, new_job_dir,
         params['partition'], params['cpus'], params['memory_gb'],
         params.get('container', DEFAULT_CONTAINER),
-        username,
+        username, email,
     )
 
 
 async def _submit_job(job_id: str, job_dir: str, partition: str,
                       cpus: int, memory_gb: int,
                       container: str = DEFAULT_CONTAINER,
-                      username: str = '') -> dict:
+                      username: str = '', email: str = '') -> dict:
     """Rsync job dir to Puhti and sbatch it. Shared by /run-code and /run-notebook."""
     if username and _active_count(username) >= MAX_CONCURRENT:
         raise HTTPException(429, f'Too many active jobs. Max {MAX_CONCURRENT} concurrent jobs per user.')
 
     with open(os.path.join(job_dir, 'params.json'), 'w') as f:
         json.dump({'partition': partition, 'cpus': cpus, 'memory_gb': memory_gb,
-                   'container': container, 'username': username}, f)
+                   'container': container, 'username': username, 'email': email}, f)
 
     user_slug  = re.sub(r'[^a-z0-9_-]', '_', username.lower()) if username else 'anonymous'
     remote_dir = f'{PUHTI_RUNS}/{user_slug}/{job_id}'
@@ -642,7 +680,7 @@ async def _submit_job(job_id: str, job_dir: str, partition: str,
         raise HTTPException(500, f'sbatch failed: {r.stderr.strip()}')
 
     slurm_id = r.stdout.strip().split()[-1]
-    _insert(job_id, slurm_id, partition, username)
+    _insert(job_id, slurm_id, partition, username, email)
     return {'job_id': job_id, 'slurm_id': slurm_id, 'status': 'queued'}
 
 
