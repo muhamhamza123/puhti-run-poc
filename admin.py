@@ -161,14 +161,22 @@ def _puhti_data() -> dict:
 
     # Current queue for project
     try:
-        out = _ssh('squeue -A project_2014823 -o "%u|%i|%P|%T|%l|%V" --noheader 2>/dev/null')
+        out = _ssh('squeue -A project_2014823 -o "%u|%i|%P|%T|%l|%V|%C" --noheader 2>/dev/null')
         jobs = []
+        project_cpus: dict = {}  # partition -> cpus in use by this project
         for line in out.splitlines():
             parts = line.split('|')
-            if len(parts) >= 6:
+            if len(parts) >= 7:
                 jobs.append({'user': parts[0], 'job_id': parts[1], 'partition': parts[2],
                              'state': parts[3], 'time_limit': parts[4], 'submit_time': parts[5]})
+                if parts[3] == 'RUNNING':
+                    p = parts[2]
+                    try:
+                        project_cpus[p] = project_cpus.get(p, 0) + int(parts[6])
+                    except ValueError:
+                        pass
         data['queue'] = jobs
+        data['project_cpus'] = project_cpus
     except Exception as e:
         data['queue'] = []
         data['queue_error'] = str(e)
@@ -691,7 +699,7 @@ pre.billing{background:var(--bg3);border:1px solid var(--border);border-radius:6
         <canvas id="chart-history" height="160"></canvas>
       </div>
       <div class="chart-box">
-        <div class="chart-title">Partition Utilization <small>CPUs alloc/total</small></div>
+        <div class="chart-title">Partition Utilization <small>Puhti cluster-wide · CPUs alloc/total</small></div>
         <canvas id="chart-partitions" height="160"></canvas>
       </div>
     </div>
@@ -739,7 +747,7 @@ pre.billing{background:var(--bg3);border:1px solid var(--border);border-radius:6
       <div class="tbl-header"><h3>Puhti Partitions</h3></div>
       <div class="tbl-wrap">
       <table>
-        <thead><tr><th>Partition</th><th>Status</th><th>Nodes</th><th>CPUs Alloc</th><th>CPUs Idle</th><th>CPUs Total</th><th>Utilization</th></tr></thead>
+        <thead><tr><th>Partition</th><th>Status</th><th>Nodes</th><th>CPUs Alloc (cluster)</th><th>CPUs Idle</th><th>CPUs Total</th><th>Cluster Utilization</th><th>My Project CPUs</th></tr></thead>
         <tbody id="partition-body"></tbody>
       </table>
       </div>
@@ -1255,15 +1263,22 @@ async function loadPuhti(force=false){
   </tr>`).join()||'<tr><td colspan="6" style="color:var(--text2);padding:12px">Queue empty</td></tr>';
 
   // Partitions
-  document.getElementById('partition-body').innerHTML=(data.partitions||[]).map(p=>`<tr>
-    <td style="font-weight:600">${p.partition}</td>
-    <td>${B(p.available)}</td>
-    <td>${p.nodes}</td>
-    <td>${p.cpus_alloc}</td>
-    <td style="color:var(--green)">${p.cpus_idle}</td>
-    <td>${p.cpus_total}</td>
-    <td style="min-width:120px">${barHTML(p.cpus_alloc,p.cpus_total)}</td>
-  </tr>`).join()||'<tr><td colspan="7" style="color:var(--text2)">No data</td></tr>';
+  const projCpus=data.project_cpus||{};
+  document.getElementById('partition-body').innerHTML=(data.partitions||[]).map(p=>{
+    const myPart=p.partition.replace('*','');
+    const myCpus=projCpus[myPart]||0;
+    const myPct=p.cpus_total&&p.cpus_total!='?'?pct(myCpus,p.cpus_total):0;
+    return `<tr>
+      <td style="font-weight:600">${p.partition}</td>
+      <td>${B(p.available)}</td>
+      <td>${p.nodes}</td>
+      <td>${p.cpus_alloc}</td>
+      <td style="color:var(--green)">${p.cpus_idle}</td>
+      <td>${p.cpus_total}</td>
+      <td style="min-width:120px">${barHTML(p.cpus_alloc,p.cpus_total)}</td>
+      <td>${myCpus>0?`<span style="color:var(--cyan);font-weight:600">${myCpus}</span> <span style="color:var(--text2);font-size:10px">(${myPct}% of partition)</span>`:'<span style="color:var(--text2)">0</span>'}</td>
+    </tr>`;
+  }).join()||'<tr><td colspan="8" style="color:var(--text2)">No data</td></tr>';
 
   // Disk & usage
   document.getElementById('disk-body').innerHTML=(data.user_disk||[]).map(r=>`<tr><td>${r.user}</td><td>${r.size}</td></tr>`).join()||'<tr><td colspan="2" style="color:var(--text2);padding:10px">No data</td></tr>';
