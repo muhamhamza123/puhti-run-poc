@@ -1,0 +1,105 @@
+Production TODO — Puhti Admin & API
+=====================================
+Last updated: 2026-07-09
+
+
+🔴 CRITICAL (must fix before real users)
+-----------------------------------------
+
+1. Remove debug-db endpoint
+   File: admin.py — @router.get('/debug-db')
+   The endpoint is auth-protected but still exposes raw DB internals.
+   Remove it once the breakdown-by-user bug is confirmed resolved.
+
+2. SESSION_SECRET has an insecure default
+   File: admin.py line 17 — SESSION_SECRET = os.environ.get('ADMIN_SESSION_SECRET', 'change-me-in-override')
+   If deployed without ADMIN_SESSION_SECRET set in override.conf, all admin
+   sessions are forgeable. Should crash on startup if the env var is missing.
+
+3. GITHUB_TOKEN placeholder in service file
+   File: deploy/puhti-run.service — GITHUB_TOKEN=your_token_here
+   Real token lives in override.conf but if someone redeploys from the service
+   file directly it breaks silently. Remove the placeholder line entirely.
+
+4. No rate limiting on submit endpoints
+   Files: api_run_endpoint.py — /run-code, /run-notebook
+   The 3-job-per-user cap exists but there is no IP or global rate limit.
+   A user who keeps polling or submitting can hammer SSH to Puhti.
+
+5. /my-jobs and /my-jobs-status have no auth
+   File: api_run_endpoint.py — /my-jobs/{username}, /my-jobs-status/{username}
+   Anyone who knows a username can poll their jobs or trigger status updates.
+   Should require the JupyterHub token header (x-jupyterhub-token).
+
+6. 48 rows with NULL username in DB
+   File: runs.db — runs table
+   Jobs submitted before username was stored show as (anon) in all reports.
+   One-time migration: UPDATE runs SET username='unknown' WHERE username IS NULL OR username='';
+
+
+🟡 SHOULD DO (before scaling to 100 users)
+--------------------------------------------
+
+7. SQLite under 4 uvicorn workers
+   File: deploy/puhti-run.service — --workers 4
+   WAL mode handles concurrent reads but heavy write contention from many
+   simultaneous submissions can cause "database is locked" errors.
+   Monitor; migrate to PostgreSQL if it becomes an issue.
+
+8. SSH connection pooling
+   Files: admin.py _ssh(), api_run_endpoint.py _ssh()
+   Every call opens a new connection to Puhti. With 100 users and auto-refresh
+   cycles, connections stack up. Add ControlMaster/ControlPersist to SSH options
+   to reuse a single multiplexed connection.
+
+9. Cleanup cron does not prune DB rows
+   File: cleanup.sh
+   Deletes files older than 30 days from NFS and 7 days from Puhti scratch
+   but the runs table in SQLite grows forever. Add:
+   DELETE FROM runs WHERE created < date('now', '-90 days')
+   to the cron script.
+
+10. Job time limit hardcoded in generic_run.sh
+    File: generic_run.sh line 5 — #SBATCH --time=02:00:00
+    Users cannot request longer jobs. Should be passed as a parameter from
+    the submit form, especially important for the longrun partition.
+
+11. No persistent log file
+    File: deploy/puhti-run.service — StandardOutput=journal
+    Logs go to systemd journal only. For production add a rotating file handler
+    so history is searchable without journalctl and survives journal rotation.
+
+12. Admin allowlist hardcoded in source
+    File: admin.py line 111 — ALLOWED_USERS = {'muhamhamza123', 'LizCarter492'}
+    Adding a new admin requires a code push. Should read from an env var
+    e.g. ADMIN_ALLOWED_USERS=muhamhamza123,LizCarter492 in override.conf.
+
+
+🟢 NICE TO HAVE
+----------------
+
+13. Email on failure does not include the error
+    File: api_run_endpoint.py — _send_email() calls on failure
+    The failure email says "click Log to see the error" but does not include
+    the actual stderr content. Including it would reduce support requests.
+
+14. No notification when container build finishes
+    File: apptainer/ + api_run_endpoint.py /request-container-simple
+    When a PR is merged the .sif build on Puhti is manual. No webhook or
+    notification tells the user when their container is actually ready to use.
+
+15. No billing quota warning to users
+    File: api_run_endpoint.py _submit_job()
+    When csc-projects billing units drop below a threshold, users should see
+    a warning in JupyterLab before submitting rather than discovering it when
+    jobs start failing.
+
+16. History chart filter has no URL state
+    File: admin.py — _ADMIN_HTML history page JS
+    The username and days filters reset on every page reload. Not critical but
+    makes it impossible to share a filtered view or bookmark a specific user.
+
+17. Dead code in repo root
+    Files: run_button_widget.py, demo_user_script.py
+    These appear to be unused leftover files from early prototyping.
+    Confirm they are not referenced anywhere then delete before open-sourcing.
