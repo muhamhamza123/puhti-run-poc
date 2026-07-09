@@ -107,16 +107,18 @@ def callback(code: str = ''):
     user_data = _gh_api('/user', access_token)
     username = user_data.get('login', '')
 
-    # Check org membership using user's own token (works for private membership too)
-    try:
-        orgs = _gh_api('/user/orgs', access_token)
-        org_names = [o['login'].lower() for o in orgs]
-        if GITHUB_ORG.lower() not in org_names:
-            raise HTTPException(403, f'User {username!r} is not a member of {GITHUB_ORG}. Orgs visible: {org_names}')
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(403, f'Could not verify org membership: {e}')
+    # Check org membership — try membership endpoint first, fall back to allowlist
+    ALLOWED_USERS = {'muhamhamza123', 'LizCarter492'}
+    if username not in ALLOWED_USERS:
+        try:
+            membership = _gh_api(f'/user/memberships/orgs/{GITHUB_ORG}', access_token)
+            state = membership.get('state', '')
+            if state not in ('active', 'pending'):
+                raise HTTPException(403, f'User {username!r} is not an active member of {GITHUB_ORG}')
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(403, f'User {username!r} is not authorised to access this panel')
 
     session = _make_session(username)
     resp = RedirectResponse(f'{PUBLIC_URL}/admin')
