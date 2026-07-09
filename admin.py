@@ -106,11 +106,16 @@ def callback(code: str = ''):
     user_data = _gh_api('/user', access_token)
     username = user_data.get('login', '')
 
-    # Check org membership
+    # Check org membership using user's own token (works for private membership too)
     try:
-        _gh_api(f'/orgs/{GITHUB_ORG}/members/{username}', access_token)
-    except Exception:
-        raise HTTPException(403, f'You are not a member of the {GITHUB_ORG} GitHub organisation')
+        orgs = _gh_api('/user/orgs', access_token)
+        org_names = [o['login'].lower() for o in orgs]
+        if GITHUB_ORG.lower() not in org_names:
+            raise HTTPException(403, f'You are not a member of the {GITHUB_ORG} GitHub organisation')
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(403, f'Could not verify org membership: {e}')
 
     session = _make_session(username)
     resp = RedirectResponse(f'{PUBLIC_URL}/admin')
