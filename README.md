@@ -1,159 +1,128 @@
-# Puhti Run POC
+# Puhti Run API
 
-Submit any Python script from a JupyterHub notebook to Puhti supercomputer and get results back.
+FastAPI backend that accepts notebook/script submissions from JupyterHub users and runs them on the Puhti supercomputer via Slurm.
 
-## How it works
-
-See `docs/architecture.svg` for the full flow diagram.
-
-1. User writes a Python script in JupyterHub
-2. Clicks **Run on Puhti** in the notebook widget
-3. Script + requirements.txt are uploaded to the head node API (port 8002)
-4. API rsyncs files to Puhti scratch and SSH submits a Slurm job
-5. Puhti installs dependencies and runs the script inside Apptainer container
-6. Results are rsynced back and downloaded as a ZIP into `./puhti_output/`
+See [`FEATURES.md`](FEATURES.md) for the full feature list and [`docs/architecture.svg`](docs/architecture.svg) for the system diagram.
 
 ---
 
-## One-time setup on the head node
+## Components
+
+| Component | Location | Description |
+|-----------|----------|-------------|
+| FastAPI app | `main.py` + `api_run_endpoint.py` | All endpoints |
+| Slurm script | `generic_run.sh` | Runs on Puhti compute nodes |
+| Apptainer defs | `apptainer/*.def` | Container definitions |
+| Container CI | `.github/workflows/build-container.yml` | Builds .sif on PR merge |
+| Service file | `deploy/puhti-run.service` | systemd unit |
+
+---
+
+## Head Node Setup
 
 ```bash
-# Clone the repo
 sudo git clone https://github.com/muhamhamza123/puhti-run-poc /opt/hbv/puhti-run
 sudo chown -R hbv:hbv /opt/hbv/puhti-run
-
-# Create NFS runs directory
-sudo mkdir -p /data/hbv/runs
-sudo chown hbv:hbv /data/hbv/runs
-
-# Install Python deps into the existing venv (reuse HBV venv)
+sudo mkdir -p /data/hbv/runs && sudo chown hbv:hbv /data/hbv/runs
 sudo /opt/hbv/venv/bin/pip install fastapi uvicorn python-multipart
-
-# Install and start the service
-sudo cp /opt/hbv/puhti-run/deploy/puhti-run.service /etc/systemd/system/
+sudo cp deploy/puhti-run.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable puhti-run
 sudo systemctl start puhti-run
-
-# Check it's running
-sudo systemctl status puhti-run
 curl http://localhost:8002/health
 ```
 
-## One-time setup on Puhti scratch
+### Service override (secrets)
+
+`/etc/systemd/system/puhti-run.service.d/override.conf`:
+
+```ini
+[Service]
+Environment="GITHUB_TOKEN=..."
+Environment="GITHUB_REPO=muhamhamza123/puhti-run-poc"
+Environment="JUPYTERHUB_URL=https://diwa-data-lab-vre.rahtiapp.fi"
+Environment="SMTP_USER=hamzasahi72000@gmail.com"
+Environment="SMTP_PASSWORD=..."
+Environment="EMAIL_FROM=hamzasahi72000@gmail.com"
+Environment="MAX_CONCURRENT_JOBS=3"
+```
+
+---
+
+## Nginx Config
+
+`/etc/nginx/conf.d/hbv.conf` — add the `/puhti/` location block:
+
+```nginx
+upstream puhti_api {
+    server 127.0.0.1:8002;
+    keepalive 32;
+}
+location /puhti/ {
+    proxy_pass         http://puhti_api/;
+    proxy_http_version 1.1;
+    proxy_set_header   Host              $host;
+    proxy_set_header   X-Real-IP         $remote_addr;
+    proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header   X-Forwarded-Proto $scheme;
+    proxy_set_header   Connection        "";
+    proxy_buffering    off;
+    proxy_pass_header  Access-Control-Allow-Origin;
+    proxy_pass_header  Access-Control-Allow-Methods;
+    proxy_pass_header  Access-Control-Allow-Headers;
+}
+```
+
+---
+
+## Puhti Setup (one-time)
 
 ```bash
-# SSH into Puhti as javedham
 ssh javedham@puhti.csc.fi
-
 mkdir -p /scratch/project_2014823/runs
+mkdir -p /scratch/project_2014823/tmp
+mkdir -p /scratch/project_2014823/pip-cache
 ```
 
-Copy the generic Slurm script to Puhti:
-
-```bash
-# From the head node
-scp -i /home/hbv/.ssh/id_puhti \
-    /opt/hbv/puhti-run/generic_run.sh \
-    javedham@puhti.csc.fi:/scratch/project_2014823/generic_run.sh
-
-chmod +x /scratch/project_2014823/generic_run.sh
-```
+The `generic_run.sh` script is copied to Puhti automatically on service start via `ExecStartPre` in the service file.
 
 ---
 
-## End-to-end test
+## Container Build Flow
 
-### Step 1 — open a notebook in JupyterHub
-
-Open any notebook on the Puhti JupyterHub. Make sure `run_button_widget.py` is in the same directory.
-
-### Step 2 — paste this into a cell and run it
-
-```python
-from run_button_widget import PuhtiRunWidget
-
-PuhtiRunWidget(
-    script_path='demo_user_script.py',
-    requirements_path='requirements.txt',
-).show()
-```
-
-You should see a widget with partition / CPU / RAM dropdowns and a green **Run on Puhti** button.
-
-### Step 3 — click Run on Puhti
-
-Watch the status label change:
-- `Submitting...` — uploading files to head node
-- `Submitted — Slurm job 12345 — polling...` — job is in the queue
-- `running` — job is executing on a compute node
-- `done` — results downloaded to `./puhti_output/`
-
-### Step 4 — check results
-
-```python
-import os
-print(os.listdir('puhti_output'))
-# ['plot.png', 'results.csv']
-
-import pandas as pd
-pd.read_csv('puhti_output/results.csv').head()
-```
-
-### Step 5 — check logs if something went wrong
-
-```python
-import requests
-r = requests.get('http://hbv.we3data.com:8002/run-logs/<job_id>')
-print(r.json()['stdout'])
-print(r.json()['stderr'])
-```
-
-Or on the head node:
-```bash
-sudo journalctl -u puhti-run -f
-```
+1. User requests a container from JupyterLab (simple form or .def upload)
+2. API opens a GitHub PR with the `.def` file in `apptainer/`
+3. Admin reviews and merges the PR
+4. GitHub Actions SSHs into Puhti and runs `sbatch apptainer build`
+5. `.sif` file becomes available at `/scratch/project_2014823/runs/{name}.sif`
+6. Container appears in the JupyterLab extension dropdown
 
 ---
 
-## Writing your own script
+## API Reference
 
-Rules for scripts that run on Puhti:
-
-1. **Save all outputs to `./output/`** — only this folder is rsynced back
-2. **List all pip dependencies in `requirements.txt`** — installed at runtime
-3. **No hardcoded paths** — script runs from its own scratch directory
-4. **Standard Python only** — no sudo, no system installs
-
-Example:
-
-```python
-# my_analysis.py
-import os
-import numpy as np
-
-os.makedirs('output', exist_ok=True)
-
-data = np.random.randn(1000)
-np.save('output/data.npy', data)
-print(f'saved {len(data)} values')
-```
-
-```
-# requirements.txt
-numpy
-```
+| Method | Endpoint | Auth |
+|--------|----------|------|
+| GET | `/health` | none |
+| GET | `/containers` | none |
+| POST | `/run-notebook` | X-JupyterHub-Token |
+| POST | `/run-code` | X-JupyterHub-Token |
+| GET | `/run-status/{job_id}` | none |
+| GET | `/run-logs/{job_id}` | none |
+| GET | `/run-results/{job_id}` | none |
+| POST | `/resubmit/{job_id}` | X-JupyterHub-Token |
+| POST | `/cancel-job/{job_id}` | none |
+| GET | `/my-jobs/{username}` | none |
+| POST | `/request-container` | none |
+| POST | `/request-container-simple` | none |
+| GET | `/my-container-requests/{username}` | none |
 
 ---
 
-## API reference
+## Database
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/run-code` | Submit script + requirements |
-| GET  | `/run-status/{job_id}` | Poll job status |
-| GET  | `/run-results/{job_id}` | Download output ZIP |
-| GET  | `/run-logs/{job_id}` | Get stdout + stderr |
-| GET  | `/health` | Health check |
+SQLite at `/data/hbv/runs/runs.db`
 
-API runs on port **8002** (separate from HBV API on 8001).
+**runs table:** `job_id, slurm_id, status, partition, username, email, created`
+
+**container_requests table:** `id, username, container, pr_url, pr_number, status, created`
