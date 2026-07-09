@@ -1102,7 +1102,7 @@ function drawHistoryChart(canvasId, data) {
   if(!canvas) return;
   const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio||1;
-  const W = canvas.offsetWidth||600, H = parseInt(canvas.getAttribute('height'))||160;
+  const W = (canvas.offsetWidth||canvas.parentElement?.offsetWidth||600), H = parseInt(canvas.getAttribute('height'))||160;
   canvas.width = W*dpr; canvas.height = H*dpr;
   ctx.scale(dpr,dpr);
   ctx.clearRect(0,0,W,H);
@@ -1164,7 +1164,7 @@ function drawPartitionChart(canvasId, partitions) {
   if(!canvas||!partitions.length) return;
   const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio||1;
-  const W = canvas.offsetWidth||600, H = parseInt(canvas.getAttribute('height'))||160;
+  const W = (canvas.offsetWidth||canvas.parentElement?.offsetWidth||600), H = parseInt(canvas.getAttribute('height'))||160;
   canvas.width = W*dpr; canvas.height = H*dpr;
   ctx.scale(dpr,dpr);
   ctx.clearRect(0,0,W,H);
@@ -1205,7 +1205,7 @@ function drawLineChart(canvasId, hours) {
   if(!canvas) return;
   const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio||1;
-  const W = canvas.offsetWidth||600, H = parseInt(canvas.getAttribute('height'))||150;
+  const W = (canvas.offsetWidth||canvas.parentElement?.offsetWidth||600), H = parseInt(canvas.getAttribute('height'))||150;
   canvas.width = W*dpr; canvas.height = H*dpr;
   ctx.scale(dpr,dpr);
   ctx.clearRect(0,0,W,H);
@@ -1673,7 +1673,7 @@ function drawResourceLineChart(canvasId, data, field, label, color){
   if(!canvas)return;
   const ctx=canvas.getContext('2d');
   const dpr=window.devicePixelRatio||1;
-  const W=canvas.offsetWidth||600, H=parseInt(canvas.getAttribute('height'))||180;
+  const W=(canvas.offsetWidth||canvas.parentElement?.offsetWidth||600), H=parseInt(canvas.getAttribute('height'))||180;
   canvas.width=W*dpr; canvas.height=H*dpr;
   ctx.scale(dpr,dpr);
   ctx.clearRect(0,0,W,H);
