@@ -35,6 +35,7 @@ try:
     _h.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
     if not any(isinstance(h, RotatingFileHandler) for h in _log.handlers):
         _log.addHandler(_h)
+    _log.info('puhti-run api_run_endpoint loaded, logging to %s', LOG_FILE)
 except OSError as e:
     _log.warning('Could not open log file %s: %s', LOG_FILE, e)
 
