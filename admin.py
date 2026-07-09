@@ -1334,12 +1334,13 @@ async function loadHistory(){
   // Per-user breakdown for the same period (only on History page)
   const hbuBody=document.getElementById('hbu-body');
   if(hbuBody){
+    const hbuDays=daysEl?daysEl.value:'30';
     let udata=null;
-    try{ udata=await api(`/admin/history-by-user?days=${days}`); }
+    try{ udata=await api(`/admin/history-by-user?days=${hbuDays}`); }
     catch(e){ hbuBody.innerHTML=`<tr><td colspan="8" style="color:var(--red);padding:12px">Error: ${e.message}</td></tr>`; }
     if(udata){
       document.getElementById('hbu-count').textContent=udata.users.length;
-      document.getElementById('hbu-period').textContent=`last ${days} days`;
+      document.getElementById('hbu-period').textContent=`last ${hbuDays} days`;
       hbuBody.innerHTML=udata.users.map(r=>{
         const rate=r.total?Math.round(r.done/r.total*100):0;
         return `<tr>
