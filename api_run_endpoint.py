@@ -94,6 +94,9 @@ def _db():
             created      TEXT DEFAULT (datetime('now'))
         )
     """)
+    cr_cols = [r[1] for r in conn.execute("PRAGMA table_info(container_requests)").fetchall()]
+    if 'email' not in cr_cols:
+        conn.execute("ALTER TABLE container_requests ADD COLUMN email TEXT DEFAULT ''")
     cols = [r[1] for r in conn.execute("PRAGMA table_info(runs)").fetchall()]
     if 'username' not in cols:
         conn.execute("ALTER TABLE runs ADD COLUMN username TEXT DEFAULT ''")
@@ -188,7 +191,64 @@ def _rsync_from(src: str, dst: str, timeout: int = 300):
     ], check=True, timeout=timeout)
 
 
+# ── Container build notifier ──────────────────────────────────────────────────
+
+def _container_build_poller():
+    """Background thread: every 10 min check if merged container PRs have a .sif on Puhti."""
+    while True:
+        time.sleep(600)
+        try:
+            with contextlib.closing(_db()) as db:
+                rows = db.execute(
+                    "SELECT id, username, container, email FROM container_requests WHERE status='merged'"
+                ).fetchall()
+            if not rows:
+                continue
+            r = _ssh(f'ls {PUHTI_RUNS}/*.sif 2>/dev/null', timeout=15)
+            ready = {os.path.basename(l)[:-4] for l in r.stdout.splitlines() if l.endswith('.sif')}
+            for row in rows:
+                if row['container'] in ready:
+                    with contextlib.closing(_db()) as db:
+                        db.execute("UPDATE container_requests SET status='ready' WHERE id=?", (row['id'],))
+                        db.commit()
+                    _log.info('container_ready container=%s user=%s', row['container'], row['username'])
+                    if row['email']:
+                        _send_email(
+                            row['email'],
+                            f'Your Puhti container "{row["container"]}" is ready ✓',
+                            f'Good news! Your custom container has finished building on Puhti and is ready to use.\n\n'
+                            f'Container: {row["container"]}\n\n'
+                            f'Open JupyterLab → Run on Puhti → select "{row["container"]}" from the container dropdown.'
+                        )
+        except Exception as e:
+            _log.warning('container_build_poller error: %s', e)
+
+
+threading.Thread(target=_container_build_poller, daemon=True, name='container-poller').start()
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
+
+@router.get('/billing')
+def get_billing():
+    """Return remaining billing units for the project."""
+    try:
+        out = _ssh('csc-projects --show-billing-units 2>/dev/null | grep -A5 project_2014823', timeout=20)
+        # Parse lines like: "Billing units remaining: 4231.5"
+        remaining = None
+        for line in out.splitlines():
+            line = line.strip()
+            if 'remaining' in line.lower():
+                parts = line.split(':')
+                if len(parts) == 2:
+                    try:
+                        remaining = float(parts[1].strip())
+                    except ValueError:
+                        pass
+        return {'raw': out, 'remaining': remaining}
+    except Exception:
+        return {'raw': 'unavailable', 'remaining': None}
+
 
 @router.get('/containers')
 def list_containers():
@@ -475,11 +535,11 @@ def _parse_packages_from_def(content: bytes) -> list[str]:
     return packages
 
 
-def _store_container_request(username: str, container: str, pr_url: str, pr_number: int):
+def _store_container_request(username: str, container: str, pr_url: str, pr_number: int, email: str = ''):
     with contextlib.closing(_db()) as db:
         db.execute(
-            "INSERT INTO container_requests (username, container, pr_url, pr_number) VALUES (?,?,?,?)",
-            (username, container, pr_url, pr_number)
+            "INSERT INTO container_requests (username, container, pr_url, pr_number, email) VALUES (?,?,?,?,?)",
+            (username, container, pr_url, pr_number, email)
         )
         db.commit()
 
@@ -532,6 +592,7 @@ async def request_container_simple(
     packages:    str = Form(...),
     description: str = Form(''),
     username:    str = Form(''),
+    email:       str = Form(''),
 ):
     """Generate a .def from a package list and open a PR."""
     if not re.match(r'^[a-z0-9-]+$', name):
@@ -542,10 +603,10 @@ async def request_container_simple(
         raise HTTPException(400, 'At least one package is required')
 
     content = _generate_def(name, pkg_list)
-    return await _open_container_pr(name, content, description, pkg_list, username)
+    return await _open_container_pr(name, content, description, pkg_list, username, email)
 
 
-async def _open_container_pr(name: str, content: bytes, description: str, packages: list[str] = [], username: str = '') -> dict:
+async def _open_container_pr(name: str, content: bytes, description: str, packages: list[str] = [], username: str = '', email: str = '') -> dict:
     if not GITHUB_TOKEN:
         raise HTTPException(500, 'GITHUB_TOKEN not configured on server')
 
@@ -603,7 +664,7 @@ async def _open_container_pr(name: str, content: bytes, description: str, packag
 
     # Store request for notification tracking
     if username:
-        _store_container_request(username, name, pr['html_url'], pr['number'])
+        _store_container_request(username, name, pr['html_url'], pr['number'], email)
 
     return {'pr_url': pr['html_url'], 'container_name': name, 'branch': branch}
 
@@ -613,11 +674,12 @@ async def request_container(
     def_file:    UploadFile = File(...),
     description: str = Form(''),
     username:    str = Form(''),
+    email:       str = Form(''),
 ):
     content  = await def_file.read()
     name     = re.sub(r'[^a-z0-9-]', '-', (def_file.filename or 'custom').replace('.def', '').lower())
     packages = _parse_packages_from_def(content)
-    return await _open_container_pr(name, content, description, packages, username)
+    return await _open_container_pr(name, content, description, packages, username, email)
 
 
 @router.get('/my-container-requests/{username}')
