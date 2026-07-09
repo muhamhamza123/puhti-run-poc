@@ -22,6 +22,19 @@ DB_PATH     = os.environ.get('RUN_DB_PATH',   '/data/hbv/runs/runs.db')
 VALID_PARTITIONS  = {'small', 'large', 'longrun', 'gpu', 'gpumedium'}
 GPU_PARTITIONS    = {'gpu', 'gpumedium'}
 DEFAULT_CONTAINER = 'general-compute'
+SSH_CONTROL_PATH  = os.environ.get('SSH_CONTROL_PATH', '/tmp/ssh-puhti-%h-%p-%r')
+
+LOG_FILE = os.environ.get('API_LOG_FILE', '/var/log/puhti-run/api.log')
+_log = logging.getLogger('puhti-run')
+if not _log.handlers:
+    try:
+        os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+        _h = RotatingFileHandler(LOG_FILE, maxBytes=10*1024*1024, backupCount=5)
+        _h.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+        _log.addHandler(_h)
+        _log.setLevel(logging.INFO)
+    except OSError:
+        pass
 
 GITHUB_TOKEN   = os.environ.get('GITHUB_TOKEN', '')
 GITHUB_REPO    = os.environ.get('GITHUB_REPO', 'muhamhamza123/puhti-run-poc')
@@ -139,13 +152,18 @@ def _active_count(username: str) -> int:
 
 # ── SSH / rsync helpers ───────────────────────────────────────────────────────
 
+_SSH_OPTS = [
+    '-o', 'StrictHostKeyChecking=no',
+    '-o', 'BatchMode=yes',
+    '-o', 'ConnectTimeout=15',
+    '-o', 'ControlMaster=auto',
+    '-o', f'ControlPath={SSH_CONTROL_PATH}',
+    '-o', 'ControlPersist=300',
+]
+
 def _ssh(cmd: str, timeout: int = 30):
     return subprocess.run(
-        ['ssh', '-i', SSH_KEY,
-         '-o', 'StrictHostKeyChecking=no',
-         '-o', 'BatchMode=yes',
-         '-o', 'ConnectTimeout=15',
-         f'{PUHTI_USER}@{PUHTI_HOST}', cmd],
+        ['ssh', '-i', SSH_KEY] + _SSH_OPTS + [f'{PUHTI_USER}@{PUHTI_HOST}', cmd],
         capture_output=True, text=True, timeout=timeout,
     )
 
@@ -153,7 +171,7 @@ def _ssh(cmd: str, timeout: int = 30):
 def _rsync_to(src: str, dst: str, timeout: int = 300):
     subprocess.run([
         'rsync', '-az',
-        '-e', f'ssh -i {SSH_KEY} -o StrictHostKeyChecking=no -o BatchMode=yes',
+        '-e', f'ssh -i {SSH_KEY} -o StrictHostKeyChecking=no -o BatchMode=yes -o ControlMaster=auto -o ControlPath={SSH_CONTROL_PATH} -o ControlPersist=300',
         src, f'{PUHTI_USER}@{PUHTI_HOST}:{dst}',
     ], check=True, timeout=timeout)
 
@@ -162,7 +180,7 @@ def _rsync_from(src: str, dst: str, timeout: int = 300):
     os.makedirs(dst, exist_ok=True)
     subprocess.run([
         'rsync', '-az',
-        '-e', f'ssh -i {SSH_KEY} -o StrictHostKeyChecking=no -o BatchMode=yes',
+        '-e', f'ssh -i {SSH_KEY} -o StrictHostKeyChecking=no -o BatchMode=yes -o ControlMaster=auto -o ControlPath={SSH_CONTROL_PATH} -o ControlPersist=300',
         f'{PUHTI_USER}@{PUHTI_HOST}:{src}', dst,
     ], check=True, timeout=timeout)
 
@@ -195,6 +213,7 @@ async def run_notebook(
     container:    str = Form(DEFAULT_CONTAINER),
     username:     str = Form(''),
     email:        str = Form(''),
+    time_hours:   int = Form(2),
     x_jupyterhub_token: Optional[str] = Header(None),
 ):
     """Accept a .ipynb file, convert it to script.py on the head node, then submit."""
@@ -227,7 +246,7 @@ async def run_notebook(
     # Strip ipython magic lines that won't run as plain python
     _strip_magics(script_path)
 
-    return await _submit_job(job_id, job_dir, partition, cpus, memory_gb, container, username, email)
+    return await _submit_job(job_id, job_dir, partition, cpus, memory_gb, container, username, email, time_hours)
 
 
 @router.post('/run-code')
@@ -241,6 +260,7 @@ async def run_code(
     container:    str = Form(DEFAULT_CONTAINER),
     username:     str = Form(''),
     email:        str = Form(''),
+    time_hours:   int = Form(2),
     x_jupyterhub_token: Optional[str] = Header(None),
 ):
     _check_rate_limit(request)
@@ -259,7 +279,7 @@ async def run_code(
     if requirements:
         _write_upload(requirements, os.path.join(job_dir, 'requirements.txt'))
 
-    return await _submit_job(job_id, job_dir, partition, cpus, memory_gb, container, username, email)
+    return await _submit_job(job_id, job_dir, partition, cpus, memory_gb, container, username, email, time_hours)
 
 
 @router.get('/my-jobs/{username}')
@@ -675,6 +695,8 @@ def run_logs(job_id: str):
 
 MAX_CONCURRENT = int(os.environ.get('MAX_CONCURRENT_JOBS', '3'))
 
+PARTITION_MAX_HOURS = {'small': 72, 'large': 72, 'longrun': 336, 'gpu': 72, 'gpumedium': 72}
+
 # Simple sliding-window rate limiter: max N submissions per IP per minute
 _rate_lock = threading.Lock()
 _rate_hits: dict = collections.defaultdict(list)
@@ -722,20 +744,26 @@ async def resubmit_job(job_id: str, x_jupyterhub_token: Optional[str] = Header(N
         params['partition'], params['cpus'], params['memory_gb'],
         params.get('container', DEFAULT_CONTAINER),
         username, email,
+        params.get('time_hours', 2),
     )
 
 
 async def _submit_job(job_id: str, job_dir: str, partition: str,
                       cpus: int, memory_gb: int,
                       container: str = DEFAULT_CONTAINER,
-                      username: str = '', email: str = '') -> dict:
+                      username: str = '', email: str = '',
+                      time_hours: int = 2) -> dict:
     """Rsync job dir to Puhti and sbatch it. Shared by /run-code and /run-notebook."""
     if username and _active_count(username) >= MAX_CONCURRENT:
         raise HTTPException(429, f'Too many active jobs. Max {MAX_CONCURRENT} concurrent jobs per user.')
 
+    max_h = PARTITION_MAX_HOURS.get(partition, 72)
+    time_hours = max(1, min(time_hours, max_h))
+
     with open(os.path.join(job_dir, 'params.json'), 'w') as f:
         json.dump({'partition': partition, 'cpus': cpus, 'memory_gb': memory_gb,
-                   'container': container, 'username': username, 'email': email}, f)
+                   'container': container, 'username': username, 'email': email,
+                   'time_hours': time_hours}, f)
 
     user_slug  = re.sub(r'[^a-z0-9_-]', '_', username.lower()) if username else 'anonymous'
     remote_dir = f'{PUHTI_RUNS}/{user_slug}/{job_id}'
@@ -745,11 +773,13 @@ async def _submit_job(job_id: str, job_dir: str, partition: str,
     use_gpu   = '1' if partition in GPU_PARTITIONS else '0'
     gres      = '--gres=gpu:v100:1' if partition in GPU_PARTITIONS else ''
     sif_path  = f'{PUHTI_RUNS}/{container}.sif'
+    time_str = f'{time_hours:02d}:00:00'
     cmd = (
         f'sbatch'
         f' --partition={partition}'
         f' --cpus-per-task={cpus}'
         f' --mem={memory_gb}G'
+        f' --time={time_str}'
         f'{" " + gres if gres else ""}'
         f' --export=ALL,JOB_DIR={remote_dir},USE_GPU={use_gpu},SIF_PATH={sif_path}'
         f' {SLURM_SH}'

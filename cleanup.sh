@@ -30,4 +30,16 @@ fi
 echo "[cleanup] pruning NFS job dirs older than ${NFS_DAYS} days..."
 find "${NFS_RUNS}" -mindepth 1 -maxdepth 1 -type d -mtime "+${NFS_DAYS}" -print -exec rm -rf {} +
 
+# ── SQLite DB row pruning ──────────────────────────────────────────────────────
+DB_PATH="${RUN_DB_PATH:-/data/hbv/runs/runs.db}"
+DB_KEEP_DAYS=90
+if [ -f "$DB_PATH" ]; then
+    echo "[cleanup] pruning DB rows older than ${DB_KEEP_DAYS} days..."
+    sqlite3 "$DB_PATH" "DELETE FROM runs WHERE created < date('now', '-${DB_KEEP_DAYS} days');"
+    sqlite3 "$DB_PATH" "VACUUM;"
+    echo "[cleanup] DB rows deleted: $?"
+else
+    echo "[cleanup] WARNING: DB not found at $DB_PATH — skipping row pruning"
+fi
+
 echo "[cleanup] done at $(date)"

@@ -37,8 +37,8 @@ Last updated: 2026-07-09
    One-time migration: UPDATE runs SET username='unknown' WHERE username IS NULL OR username='';
 
 
-🟡 SHOULD DO (before scaling to 100 users)
---------------------------------------------
+🟡 SHOULD DO — ALL FIXED 2026-07-09
+-------------------------------------
 
 7. SQLite under 4 uvicorn workers
    File: deploy/puhti-run.service — --workers 4
@@ -46,33 +46,30 @@ Last updated: 2026-07-09
    simultaneous submissions can cause "database is locked" errors.
    Monitor; migrate to PostgreSQL if it becomes an issue.
 
-8. SSH connection pooling
+8. [DONE] SSH connection pooling
    Files: admin.py _ssh(), api_run_endpoint.py _ssh()
-   Every call opens a new connection to Puhti. With 100 users and auto-refresh
-   cycles, connections stack up. Add ControlMaster/ControlPersist to SSH options
-   to reuse a single multiplexed connection.
+   Added ControlMaster=auto + ControlPersist=300 + ControlPath to both
+   _ssh() functions. Multiplexes SSH connections; 5-min keepalive.
 
-9. Cleanup cron does not prune DB rows
+9. [DONE] Cleanup cron does not prune DB rows
    File: cleanup.sh
-   Deletes files older than 30 days from NFS and 7 days from Puhti scratch
-   but the runs table in SQLite grows forever. Add:
-   DELETE FROM runs WHERE created < date('now', '-90 days')
-   to the cron script.
+   Added DELETE FROM runs WHERE created < date('now', '-90 days') + VACUUM
+   at the end of cleanup.sh. Runs daily via cron.
 
-10. Job time limit hardcoded in generic_run.sh
-    File: generic_run.sh line 5 — #SBATCH --time=02:00:00
-    Users cannot request longer jobs. Should be passed as a parameter from
-    the submit form, especially important for the longrun partition.
+10. [DONE] Job time limit hardcoded in generic_run.sh
+    File: generic_run.sh — removed #SBATCH --time=02:00:00
+    time_hours param added to /run-code and /run-notebook endpoints.
+    Clamped server-side to partition max (longrun=336h, others=72h).
 
-11. No persistent log file
-    File: deploy/puhti-run.service — StandardOutput=journal
-    Logs go to systemd journal only. For production add a rotating file handler
-    so history is searchable without journalctl and survives journal rotation.
+11. [DONE] No persistent log file
+    Files: admin.py, api_run_endpoint.py
+    RotatingFileHandler added to both — /var/log/puhti-run/api.log,
+    10 MB × 5 rotations. Path configurable via API_LOG_FILE env var.
 
-12. Admin allowlist hardcoded in source
-    File: admin.py line 111 — ALLOWED_USERS = {'muhamhamza123', 'LizCarter492'}
-    Adding a new admin requires a code push. Should read from an env var
-    e.g. ADMIN_ALLOWED_USERS=muhamhamza123,LizCarter492 in override.conf.
+12. [DONE] Admin allowlist hardcoded in source
+    File: admin.py — ALLOWED_USERS now reads ADMIN_ALLOWED_USERS env var.
+    deploy/puhti-run.service sets ADMIN_ALLOWED_USERS=muhamhamza123,LizCarter492.
+    Add new admins via override.conf without a code push.
 
 
 🟢 NICE TO HAVE

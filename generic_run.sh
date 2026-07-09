@@ -2,7 +2,7 @@
 #SBATCH --job-name=puhti_run
 #SBATCH --account=project_2014823
 #SBATCH --ntasks=1
-#SBATCH --time=02:00:00
+# --time is passed at submit time via sbatch --time flag
 # --partition / --cpus-per-task / --mem / --gres passed at submit time
 
 export MODULEPATH=/appl/modulefiles:$MODULEPATH

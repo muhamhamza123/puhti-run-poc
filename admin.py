@@ -2,7 +2,8 @@
 Admin panel — GitHub OAuth (DIWA org) + dashboard endpoints.
 All routes are prefixed /admin and mounted in main.py.
 """
-import os, json, time, hashlib, hmac, contextlib, re, sqlite3
+import os, json, time, hashlib, hmac, contextlib, re, sqlite3, logging
+from logging.handlers import RotatingFileHandler
 import urllib.request, urllib.parse, urllib.error
 from fastapi import APIRouter, HTTPException, Request, Cookie
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -27,6 +28,19 @@ PUHTI_USER = os.environ.get('PUHTI_USER',    'javedham')
 PUHTI_HOST = os.environ.get('PUHTI_HOST',    'puhti.csc.fi')
 
 CALLBACK_URL = f'{PUBLIC_URL}/admin/callback'
+SSH_CONTROL_PATH = os.environ.get('SSH_CONTROL_PATH', '/tmp/ssh-puhti-admin-%h-%p-%r')
+
+LOG_FILE = os.environ.get('API_LOG_FILE', '/var/log/puhti-run/api.log')
+_log = logging.getLogger('puhti-admin')
+if not _log.handlers:
+    try:
+        os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+        _h = RotatingFileHandler(LOG_FILE, maxBytes=10*1024*1024, backupCount=5)
+        _h.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+        _log.addHandler(_h)
+        _log.setLevel(logging.INFO)
+    except OSError:
+        pass
 
 # ── Session cookie helpers ────────────────────────────────────────────────────
 
@@ -110,7 +124,8 @@ def callback(code: str = ''):
     username = user_data.get('login', '')
 
     # Check org membership — try membership endpoint first, fall back to allowlist
-    ALLOWED_USERS = {'muhamhamza123', 'LizCarter492'}
+    _env_list = os.environ.get('ADMIN_ALLOWED_USERS', 'muhamhamza123,LizCarter492')
+    ALLOWED_USERS = {u.strip() for u in _env_list.split(',') if u.strip()}
     if username not in ALLOWED_USERS:
         try:
             membership = _gh_api(f'/user/memberships/orgs/{GITHUB_ORG}', access_token)
@@ -140,8 +155,13 @@ import subprocess
 
 def _ssh(cmd: str, timeout: int = 30) -> str:
     r = subprocess.run(
-        ['ssh', '-i', SSH_KEY, '-o', 'StrictHostKeyChecking=no',
-         '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15',
+        ['ssh', '-i', SSH_KEY,
+         '-o', 'StrictHostKeyChecking=no',
+         '-o', 'BatchMode=yes',
+         '-o', 'ConnectTimeout=15',
+         '-o', f'ControlMaster=auto',
+         '-o', f'ControlPath={SSH_CONTROL_PATH}',
+         '-o', 'ControlPersist=300',
          f'{PUHTI_USER}@{PUHTI_HOST}', cmd],
         capture_output=True, text=True, timeout=timeout,
     )
