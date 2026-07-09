@@ -26,16 +26,17 @@ DEFAULT_CONTAINER = 'general-compute'
 SSH_CONTROL_PATH  = os.environ.get('SSH_CONTROL_PATH', '/tmp/ssh-puhti-%h-%p-%r')
 
 LOG_FILE = os.environ.get('API_LOG_FILE', '/var/log/puhti-run/api.log')
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s %(levelname)s %(message)s')
 _log = logging.getLogger('puhti-run')
-if not _log.handlers:
-    try:
-        os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
-        _h = RotatingFileHandler(LOG_FILE, maxBytes=10*1024*1024, backupCount=5)
-        _h.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+try:
+    os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+    _h = RotatingFileHandler(LOG_FILE, maxBytes=10*1024*1024, backupCount=5)
+    _h.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+    if not any(isinstance(h, RotatingFileHandler) for h in _log.handlers):
         _log.addHandler(_h)
-        _log.setLevel(logging.INFO)
-    except OSError:
-        pass
+except OSError as e:
+    _log.warning('Could not open log file %s: %s', LOG_FILE, e)
 
 GITHUB_TOKEN   = os.environ.get('GITHUB_TOKEN', '')
 GITHUB_REPO    = os.environ.get('GITHUB_REPO', 'muhamhamza123/puhti-run-poc')
