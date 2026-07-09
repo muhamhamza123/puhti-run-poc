@@ -1,35 +1,48 @@
-# Puhti Run POC — Production TODO
+# Puhti Runner — Production TODO
 
-## Security
-- [x] JupyterHub token auth: validate token against Rahti JupyterHub API, extract username server-side (v16, done)
-- [ ] Rotate test GitHub token `ghp_qZJf...` — update in head node `override.conf` AND GitHub repo secret `GITHUB_TOKEN`
+## Must Do Before 100 Users
 
-## Reliability
-- [x] `ExecStartPre` `-` prefix so service starts when Puhti is down
-- [x] `ConnectTimeout=10` on scp in service file
-- [x] Service managed by systemd with `Restart=on-failure` — no manual uvicorn needed
-- [ ] Health monitoring/alerting — e.g. cron that curls `/health` and emails on failure
-- [ ] `sudo systemctl enable puhti-run` — enable service to start on boot (not done yet)
+- [ ] **SQLite WAL mode** — add `PRAGMA journal_mode=WAL` on DB open to prevent lock errors under concurrent writes
+- [ ] **Scratch cleanup cron** — SSH to Puhti, delete job dirs older than 7 days where results already rsynced back
+- [ ] **NFS cleanup cron** — delete `/data/hbv/runs/{job_id}/` dirs older than 30 days
+- [ ] **`sudo systemctl enable puhti-run`** — service must start on reboot (one command, not done yet)
 
-## Scale
-- [ ] SQLite WAL mode + connection timeout — prevents lock errors under concurrent writes with 4 uvicorn workers
-- [ ] SQLite → PostgreSQL when user count grows beyond ~50 concurrent (fine for now)
-- [ ] Cleanup old job dirs on Puhti scratch (`/scratch/project_2014823/runs/{user}/{job}/`) — cron after X days
-- [ ] Cleanup old job dirs on head node NFS (`/data/hbv/runs/`) — cron after X days
-- [ ] CSC billing quota per user — no cap currently, one user can drain project_2014823 quota
+## Should Do Soon
 
-## User Experience
-- [x] Email/notification when job finishes — optional email field in Submit tab, sent via smtp.csc.fi on done/failed (v18)
-- [x] Resubmit failed job — ↺ Resubmit button per job row (v17)
-- [x] Show job output log in UI — 📋 Log button per job, shows stdout/stderr (empty while queued, live once running) (v17)
+- [ ] **Admin panel** — web UI at `/puhti/admin` showing all jobs across users, per-user activity, container request management
+- [ ] **Health monitoring** — cron that curls `/health` every 5 min and emails if down
+- [ ] **CSC billing quota per user** — cap Slurm hours per user per month to prevent one user draining project_2014823
 
-## Admin
-- [ ] Admin panel — job history across all users, per-user quota display, approve/reject container requests from UI
-- [x] GitHub labels — removed, unnecessary complexity for the PR review workflow
-- [x] CI: confirm build trigger is merge-only (already verified — triggers on push to main, correct)
+## Nice to Have (not blocking)
 
-## Container Request Workflow
-- [x] Simple form — users describe packages, API generates `.def` and opens PR
-- [x] Auto-label PRs by package type (hydrology/ml/geospatial/general)
-- [x] Container request status visible in UI under "My Container Requests"
-- [ ] Admin approve/reject container requests from UI (currently only via GitHub PR merge)
+- [ ] **SQLite → PostgreSQL** — only needed at ~50+ concurrent users, fine for now
+- [ ] **Input data files** — currently only notebook + requirements.txt can be uploaded; no way to pass additional input files to jobs
+
+## Done
+
+### Security
+- [x] JupyterHub token auth — validated server-side against JupyterHub API, username cannot be spoofed (v16)
+- [x] GitHub test token rotated
+
+### Reliability
+- [x] `ExecStartPre` `-` prefix + `ConnectTimeout=10` — service starts even when Puhti is down
+- [x] systemd manages uvicorn — auto-restarts on failure, no manual starts needed
+
+### User Experience
+- [x] Job history with live status polling every 10s
+- [x] 📋 Log button — shows stdout/stderr per job (live while running)
+- [x] ↺ Resubmit button — resubmits failed/cancelled jobs with original settings
+- [x] ✕ Cancel button — cancels queued/running jobs
+- [x] ↓ Get button — saves results to `~/puhti-results/` on PVC
+- [x] Email notification on job done/failed via Gmail SMTP (v18/v19)
+
+### Container Workflow
+- [x] Simple request form — package list → auto-generate `.def` → open GitHub PR
+- [x] Container request status visible in UI (pending/merged/closed)
+- [x] CI builds `.sif` on Puhti automatically on PR merge
+
+### Infrastructure
+- [x] Nginx `/puhti/` reverse proxy with CORS headers
+- [x] Rate limiting — max 3 concurrent jobs per user
+- [x] Per-user job directories on Puhti scratch
+- [x] `params.json` stored per job for resubmit
