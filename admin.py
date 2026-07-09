@@ -506,6 +506,25 @@ def admin_history_by_user(days: int = 30, admin_session: str | None = Cookie(def
     return {'users': [dict(r) for r in rows]}
 
 
+@router.get('/debug-db')
+def admin_debug_db(admin_session: str | None = Cookie(default=None)):
+    """Quick DB diagnostic — row count, date range, null usernames."""
+    _require_auth(admin_session)
+    with contextlib.closing(_db()) as db:
+        total = db.execute('SELECT COUNT(*) FROM runs').fetchone()[0]
+        null_users = db.execute('SELECT COUNT(*) FROM runs WHERE username IS NULL OR username=""').fetchone()[0]
+        date_range = db.execute('SELECT MIN(created), MAX(created) FROM runs').fetchone()
+        sample = db.execute('SELECT username, status, created FROM runs ORDER BY created DESC LIMIT 5').fetchall()
+        last30 = db.execute('SELECT COUNT(*) FROM runs WHERE created >= date("now", "-30 days")').fetchone()[0]
+    return {
+        'total_rows': total,
+        'null_or_empty_username': null_users,
+        'date_range': {'min': date_range[0], 'max': date_range[1]},
+        'last_30_days_rows': last30,
+        'recent_sample': [dict(r) for r in sample],
+    }
+
+
 @router.get('/refresh-puhti')
 def admin_refresh_puhti(admin_session: str | None = Cookie(default=None)):
     """Force a fresh SSH pull, ignoring cache."""
