@@ -1334,7 +1334,9 @@ async function loadHistory(){
   // Per-user breakdown for the same period (only on History page)
   const hbuBody=document.getElementById('hbu-body');
   if(hbuBody){
-    const udata=await api(`/admin/history-by-user?days=${days}`);
+    let udata=null;
+    try{ udata=await api(`/admin/history-by-user?days=${days}`); }
+    catch(e){ hbuBody.innerHTML=`<tr><td colspan="8" style="color:var(--red);padding:12px">Error: ${e.message}</td></tr>`; }
     if(udata){
       document.getElementById('hbu-count').textContent=udata.users.length;
       document.getElementById('hbu-period').textContent=`last ${days} days`;
