@@ -1072,7 +1072,7 @@ function nav(name) {
   if(name==='dashboard'){loadToday();loadStats();loadPuhti();loadHistory();}
   if(name==='queue'||name==='partitions')loadPuhti();
   if(name==='jobs')loadJobs();
-  if(name==='history')loadHistory();
+  if(name==='history'){loadHistory();loadHistoryByUser();}
   if(name==='users')loadStats();
   if(name==='containers')loadContainerRequests();
   if(name==='puhti')loadPuhti();
@@ -1519,19 +1519,51 @@ async function loadPuhti(force=false){
   }).join('')||'<tr><td colspan="4" style="color:var(--text2);padding:10px">No efficiency data yet</td></tr>';
 }
 
+async function loadHistoryByUser(){
+  const daysEl=document.getElementById('hist-days-filter');
+  const days=daysEl?daysEl.value:'30';
+  const hbuBody=document.getElementById('hbu-body');
+  if(!hbuBody)return;
+  let udata=null;
+  try{ udata=await api(`/admin/history-by-user?days=${days}`); }
+  catch(e){ hbuBody.innerHTML=`<tr><td colspan="8" style="color:var(--red);padding:12px">Error: ${e.message}</td></tr>`; return; }
+  if(!udata)return;
+  document.getElementById('hbu-count').textContent=udata.users.length;
+  document.getElementById('hbu-period').textContent=`last ${days} days`;
+  hbuBody.innerHTML=udata.users.map(r=>`<tr>
+    <td style="font-weight:500">${r.username||'(anon)'}</td>
+    <td>${r.total}</td>
+    <td><span style="color:var(--green)">${r.done}</span></td>
+    <td>${r.failed?'<span style="color:var(--red)">'+r.failed+'</span>':'<span style="color:var(--text2)">0</span>'}</td>
+    <td><span style="color:var(--text2)">${r.cancelled}</span></td>
+    <td>${barHTML(r.done,r.total)}</td>
+    <td style="color:var(--text2);font-size:11px">${fmt(r.last_active)}</td>
+    <td><button class="btn sm ghost" onclick="jumpToHistory('${r.username||''}')">Filter</button></td>
+  </tr>`).join('')||'<tr><td colspan="8" style="color:var(--text2);padding:12px">No data</td></tr>';
+}
+
 async function loadHistory(){
-  const data=await api('/admin/history?days=30');
+  const userEl=document.getElementById('hist-user-filter');
+  const daysEl=document.getElementById('hist-days-filter');
+  const user=userEl?userEl.value:'';
+  const days=daysEl?daysEl.value:'30';
+  let path=`/admin/history?days=${days}`;
+  if(user)path+=`&username=${encodeURIComponent(user)}`;
+  const data=await api(path);
   if(!data)return;
   _history=data.history;
   const total=_history.reduce((s,r)=>s+r.total,0);
   const done=_history.reduce((s,r)=>s+r.done,0);
   const failed=_history.reduce((s,r)=>s+r.failed,0);
+  const cancelled=_history.reduce((s,r)=>s+r.cancelled,0);
   const rate=total?Math.round(done/total*100):0;
 
-  ['h-total','h-done','h-failed','h-rate'].forEach((id,i)=>{
-    const el=document.getElementById(id);
-    if(el)el.textContent=[total,done,failed,rate+'%'][i];
-  });
+  const ids=['h-total','h-done','h-failed','h-cancelled','h-rate'];
+  const vals=[total,done,failed,cancelled,rate+'%'];
+  ids.forEach((id,i)=>{const el=document.getElementById(id);if(el)el.textContent=vals[i];});
+
+  const lblEl=document.getElementById('hist-chart-label');
+  if(lblEl)lblEl.textContent=`last ${days} days${user?' — '+user:' — all users'}`;
 
   document.getElementById('history-body').innerHTML=[..._history].reverse().map(r=>{
     return `<tr>
@@ -1549,33 +1581,9 @@ async function loadHistory(){
 
   drawHistoryChart('chart-history',_history);
   renderHistChart(_histMode||'jobs');
-
-  // Per-user breakdown for the same period (only on History page)
-  const hbuBody=document.getElementById('hbu-body');
-  if(hbuBody){
-    const hbuDays=daysEl?daysEl.value:'30';
-    let udata=null;
-    try{ udata=await api(`/admin/history-by-user?days=${hbuDays}`); }
-    catch(e){ hbuBody.innerHTML=`<tr><td colspan="8" style="color:var(--red);padding:12px">Error: ${e.message}</td></tr>`; }
-    if(udata){
-      document.getElementById('hbu-count').textContent=udata.users.length;
-      document.getElementById('hbu-period').textContent=`last ${hbuDays} days`;
-      hbuBody.innerHTML=udata.users.map(r=>{
-        const rate=r.total?Math.round(r.done/r.total*100):0;
-        return `<tr>
-          <td style="font-weight:500">${r.username||'(anon)'}</td>
-          <td>${r.total}</td>
-          <td><span style="color:var(--green)">${r.done}</span></td>
-          <td>${r.failed?'<span style="color:var(--red)">'+r.failed+'</span>':'<span style="color:var(--text2)">0</span>'}</td>
-          <td><span style="color:var(--text2)">${r.cancelled}</span></td>
-          <td>${barHTML(r.done,r.total)}</td>
-          <td style="color:var(--text2);font-size:11px">${fmt(r.last_active)}</td>
-          <td><button class="btn sm ghost" onclick="jumpToHistory('${r.username||''}')">Filter</button></td>
-        </tr>`;
-      }).join('')||'<tr><td colspan="8" style="color:var(--text2);padding:12px">No data</td></tr>';
-    }
-  }
+  loadHistoryByUser();
 }
+
 
 async function loadJobs(){
   const user=document.getElementById('filter-user').value.trim();
@@ -1616,9 +1624,11 @@ async function loadContainerRequests(){
 
 function refreshAll(){
   document.getElementById('refresh-ts').textContent='Refreshing…';
-  Promise.all([loadToday(),loadStats(),loadPuhti(true),loadHistory(),loadContainerRequests()]).then(()=>{
+  // allSettled: update timestamp even if one call (e.g. SSH) is slow/fails
+  Promise.allSettled([loadToday(),loadStats(),loadHistory(),loadContainerRequests()]).then(()=>{
     document.getElementById('refresh-ts').textContent='Updated '+new Date().toLocaleTimeString();
   });
+  loadPuhti(true); // SSH calls run independently — don't block the timestamp
 }
 
 setInterval(()=>{
