@@ -265,6 +265,69 @@ def my_jobs(username: str):
     return {'jobs': [dict(r) for r in rows]}
 
 
+@router.get('/my-jobs-status/{username}')
+def my_jobs_status(username: str):
+    """Return all jobs for a user with statuses refreshed in a single Slurm SSH call."""
+    with contextlib.closing(_db()) as db:
+        rows = db.execute(
+            "SELECT job_id, slurm_id, status, partition, created FROM runs "
+            "WHERE username=? ORDER BY created DESC LIMIT 50",
+            (username,)
+        ).fetchall()
+    jobs = [dict(r) for r in rows]
+
+    active = [j for j in jobs if j['status'] in ('queued', 'running')]
+    if active:
+        slurm_ids = ','.join(j['slurm_id'] for j in active)
+        r = _ssh(f"squeue -j {slurm_ids} -h --format='%i %T' 2>/dev/null", timeout=20)
+        live = {}
+        for line in r.stdout.splitlines():
+            parts = line.strip().split()
+            if len(parts) == 2:
+                live[parts[0]] = parts[1]
+
+        for job in active:
+            slurm_state = live.get(job['slurm_id'], '')
+            if not slurm_state:
+                user_slug  = re.sub(r'[^a-z0-9_-]', '_', username.lower()) if username else 'anonymous'
+                remote_dir = f'{PUHTI_RUNS}/{user_slug}/{job["job_id"]}'
+                try:
+                    _rsync_from(f'{remote_dir}/', os.path.join(NFS_RUNS, job['job_id']) + '/')
+                except Exception:
+                    pass
+                output_dir = os.path.join(NFS_RUNS, job['job_id'], 'output')
+                new_status = 'done' if (os.path.isdir(output_dir) and os.listdir(output_dir)) else 'failed'
+            elif slurm_state in ('RUNNING', 'COMPLETING'):
+                new_status = 'running'
+            elif slurm_state in ('PENDING', 'CONFIGURING'):
+                new_status = 'queued'
+            elif slurm_state in ('FAILED', 'TIMEOUT', 'NODE_FAIL'):
+                new_status = 'failed'
+            elif slurm_state == 'CANCELLED':
+                new_status = 'cancelled'
+            else:
+                new_status = 'running'
+
+            if new_status != job['status']:
+                _set_status(job['job_id'], new_status)
+                job['status'] = new_status
+                if new_status in ('done', 'failed'):
+                    full = _get(job['job_id'])
+                    email = full.get('email', '') if full else ''
+                    slurm_id = job['slurm_id']
+                    if new_status == 'done':
+                        _send_email(email, f'Puhti job {slurm_id} completed ✓',
+                            f'Your Puhti job has finished successfully.\n\nJob ID:   {job["job_id"]}\nSlurm ID: {slurm_id}\n\n'
+                            f'Open JupyterLab → Jobs tab → click "↓ Get" to save results to your files.')
+                    else:
+                        _send_email(email, f'Puhti job {slurm_id} failed ✗',
+                            f'Your Puhti job failed.\n\nJob ID:   {job["job_id"]}\nSlurm ID: {slurm_id}\n\n'
+                            f'Open JupyterLab → Jobs tab → click "📋 Log" to see the error output.\n'
+                            f'You can resubmit with the "↺ Resubmit" button.')
+
+    return {'jobs': jobs}
+
+
 @router.get('/run-status/{job_id}')
 def run_status(job_id: str):
     job = _get(job_id)
