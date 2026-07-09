@@ -100,7 +100,8 @@ def callback(code: str = ''):
         token_data = json.loads(r.read())
     access_token = token_data.get('access_token', '')
     if not access_token:
-        raise HTTPException(401, 'GitHub OAuth failed')
+        error = token_data.get('error_description', token_data.get('error', 'unknown'))
+        raise HTTPException(401, f'GitHub OAuth failed: {error}')
 
     # Get username
     user_data = _gh_api('/user', access_token)
