@@ -576,6 +576,38 @@ def run_logs(job_id: str):
 MAX_CONCURRENT = int(os.environ.get('MAX_CONCURRENT_JOBS', '3'))
 
 
+@router.post('/resubmit/{job_id}')
+async def resubmit_job(job_id: str, x_jupyterhub_token: Optional[str] = Header(None)):
+    """Resubmit a previous job using its saved params."""
+    job = _get(job_id)
+    if not job:
+        raise HTTPException(404, 'Job not found')
+
+    params_path = os.path.join(NFS_RUNS, job_id, 'params.json')
+    if not os.path.exists(params_path):
+        raise HTTPException(400, 'No params saved for this job — cannot resubmit')
+
+    with open(params_path) as f:
+        params = json.load(f)
+
+    username = params.get('username', job.get('username', ''))
+    if x_jupyterhub_token:
+        username = _validate_jupyterhub_token(x_jupyterhub_token)
+
+    new_job_id  = str(uuid.uuid4())
+    old_job_dir = os.path.join(NFS_RUNS, job_id)
+    new_job_dir = os.path.join(NFS_RUNS, new_job_id)
+    shutil.copytree(old_job_dir, new_job_dir,
+                    ignore=shutil.ignore_patterns('output', 'stdout.txt', 'stderr.txt', 'params.json'))
+
+    return await _submit_job(
+        new_job_id, new_job_dir,
+        params['partition'], params['cpus'], params['memory_gb'],
+        params.get('container', DEFAULT_CONTAINER),
+        username,
+    )
+
+
 async def _submit_job(job_id: str, job_dir: str, partition: str,
                       cpus: int, memory_gb: int,
                       container: str = DEFAULT_CONTAINER,
@@ -583,6 +615,10 @@ async def _submit_job(job_id: str, job_dir: str, partition: str,
     """Rsync job dir to Puhti and sbatch it. Shared by /run-code and /run-notebook."""
     if username and _active_count(username) >= MAX_CONCURRENT:
         raise HTTPException(429, f'Too many active jobs. Max {MAX_CONCURRENT} concurrent jobs per user.')
+
+    with open(os.path.join(job_dir, 'params.json'), 'w') as f:
+        json.dump({'partition': partition, 'cpus': cpus, 'memory_gb': memory_gb,
+                   'container': container, 'username': username}, f)
 
     user_slug  = re.sub(r'[^a-z0-9_-]', '_', username.lower()) if username else 'anonymous'
     remote_dir = f'{PUHTI_RUNS}/{user_slug}/{job_id}'
