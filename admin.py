@@ -446,6 +446,25 @@ def admin_history(days: int = 30, username: str = '', admin_session: str | None 
     return {'history': [dict(r) for r in rows]}
 
 
+@router.get('/history-by-user')
+def admin_history_by_user(days: int = 30, admin_session: str | None = Cookie(default=None)):
+    """Per-user job totals for the last N days."""
+    _require_auth(admin_session)
+    with contextlib.closing(_db()) as db:
+        rows = db.execute('''
+            SELECT username,
+                   COUNT(*) as total,
+                   SUM(CASE WHEN status="done"      THEN 1 ELSE 0 END) as done,
+                   SUM(CASE WHEN status="failed"    THEN 1 ELSE 0 END) as failed,
+                   SUM(CASE WHEN status="cancelled" THEN 1 ELSE 0 END) as cancelled,
+                   MAX(created) as last_active
+            FROM runs
+            WHERE created >= date("now", ?)
+            GROUP BY username ORDER BY total DESC
+        ''', (f'-{days} days',)).fetchall()
+    return {'users': [dict(r) for r in rows]}
+
+
 @router.get('/refresh-puhti')
 def admin_refresh_puhti(admin_session: str | None = Cookie(default=None)):
     """Force a fresh SSH pull, ignoring cache."""
@@ -783,6 +802,19 @@ pre.billing{background:var(--bg3);border:1px solid var(--border);border-radius:6
       <table>
         <thead><tr><th>Date</th><th>Total</th><th>Done</th><th>Failed</th><th>Cancelled</th><th>Success Rate</th></tr></thead>
         <tbody id="history-body"></tbody>
+      </table>
+      </div>
+    </div>
+    <div class="tbl-box" style="margin-top:16px">
+      <div class="tbl-header">
+        <h3>Breakdown by User</h3>
+        <span class="chip" id="hbu-count">0</span>
+        <small style="color:var(--text2);font-size:10px;margin-left:8px" id="hbu-period"></small>
+      </div>
+      <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>User</th><th>Total Jobs</th><th>Done</th><th>Failed</th><th>Cancelled</th><th>Success Rate</th><th>Last Active</th><th></th></tr></thead>
+        <tbody id="hbu-body"></tbody>
       </table>
       </div>
     </div>
@@ -1280,6 +1312,29 @@ async function loadHistory(){
 
   drawHistoryChart('chart-history',_history);
   drawHistoryChart('chart-history2',_history);
+
+  // Per-user breakdown for the same period (only on History page)
+  const hbuBody=document.getElementById('hbu-body');
+  if(hbuBody){
+    const udata=await api(`/admin/history-by-user?days=${days}`);
+    if(udata){
+      document.getElementById('hbu-count').textContent=udata.users.length;
+      document.getElementById('hbu-period').textContent=`last ${days} days`;
+      hbuBody.innerHTML=udata.users.map(r=>{
+        const rate=r.total?Math.round(r.done/r.total*100):0;
+        return `<tr>
+          <td style="font-weight:500">${r.username||'(anon)'}</td>
+          <td>${r.total}</td>
+          <td><span style="color:var(--green)">${r.done}</span></td>
+          <td>${r.failed?'<span style="color:var(--red)">'+r.failed+'</span>':'<span style="color:var(--text2)">0</span>'}</td>
+          <td><span style="color:var(--text2)">${r.cancelled}</span></td>
+          <td>${barHTML(r.done,r.total)}</td>
+          <td style="color:var(--text2);font-size:11px">${fmt(r.last_active)}</td>
+          <td><button class="btn sm ghost" onclick="jumpToHistory('${r.username||''}')">Filter</button></td>
+        </tr>`;
+      }).join('')||'<tr><td colspan="8" style="color:var(--text2);padding:12px">No data</td></tr>';
+    }
+  }
 }
 
 async function loadJobs(){
