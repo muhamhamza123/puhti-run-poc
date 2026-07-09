@@ -25,9 +25,11 @@ DEFAULT_CONTAINER = 'general-compute'
 GITHUB_TOKEN   = os.environ.get('GITHUB_TOKEN', '')
 GITHUB_REPO    = os.environ.get('GITHUB_REPO', 'muhamhamza123/puhti-run-poc')
 JUPYTERHUB_URL = os.environ.get('JUPYTERHUB_URL', 'https://diwa-data-lab-vre.rahtiapp.fi')
-SMTP_HOST      = os.environ.get('SMTP_HOST', 'smtp.csc.fi')
-SMTP_PORT      = int(os.environ.get('SMTP_PORT', '25'))
-EMAIL_FROM     = os.environ.get('EMAIL_FROM', 'puhti-runner@hbv.we3data.com')
+SMTP_HOST      = os.environ.get('SMTP_HOST', 'smtp.gmail.com')
+SMTP_PORT      = int(os.environ.get('SMTP_PORT', '587'))
+SMTP_USER      = os.environ.get('SMTP_USER', '')
+SMTP_PASSWORD  = os.environ.get('SMTP_PASSWORD', '')
+EMAIL_FROM     = os.environ.get('EMAIL_FROM', SMTP_USER)
 
 
 def _validate_jupyterhub_token(token: str) -> str:
@@ -90,7 +92,7 @@ def _insert(job_id, slurm_id, partition, username='', email=''):
 
 
 def _send_email(to: str, subject: str, body: str) -> None:
-    if not to:
+    if not to or not SMTP_USER or not SMTP_PASSWORD:
         return
     try:
         msg = MIMEText(body)
@@ -98,6 +100,9 @@ def _send_email(to: str, subject: str, body: str) -> None:
         msg['From'] = EMAIL_FROM
         msg['To'] = to
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as s:
+            s.ehlo()
+            s.starttls()
+            s.login(SMTP_USER, SMTP_PASSWORD)
             s.sendmail(EMAIL_FROM, [to], msg.as_string())
     except Exception as e:
         import logging
