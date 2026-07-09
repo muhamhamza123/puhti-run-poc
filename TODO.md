@@ -12,9 +12,11 @@
 - [ ] `sudo systemctl enable puhti-run` — enable service to start on boot (not done yet)
 
 ## Scale
+- [ ] SQLite WAL mode + connection timeout — prevents lock errors under concurrent writes with 4 uvicorn workers
 - [ ] SQLite → PostgreSQL when user count grows beyond ~50 concurrent (fine for now)
-- [ ] Cleanup old job dirs on Puhti scratch (`/scratch/project_2014823/runs/{user}/{job}/`)
-- [ ] Cleanup old job dirs on head node NFS (`/data/hbv/runs/`)
+- [ ] Cleanup old job dirs on Puhti scratch (`/scratch/project_2014823/runs/{user}/{job}/`) — cron after X days
+- [ ] Cleanup old job dirs on head node NFS (`/data/hbv/runs/`) — cron after X days
+- [ ] CSC billing quota per user — no cap currently, one user can drain project_2014823 quota
 
 ## User Experience
 - [x] Email/notification when job finishes — optional email field in Submit tab, sent via smtp.csc.fi on done/failed (v18)
