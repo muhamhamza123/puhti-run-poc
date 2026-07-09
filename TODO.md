@@ -5,7 +5,7 @@
 - [ ] **SQLite WAL mode** — add `PRAGMA journal_mode=WAL` on DB open to prevent lock errors under concurrent writes
 - [ ] **Scratch cleanup cron** — SSH to Puhti, delete job dirs older than 7 days where results already rsynced back
 - [ ] **NFS cleanup cron** — delete `/data/hbv/runs/{job_id}/` dirs older than 30 days
-- [ ] **`sudo systemctl enable puhti-run`** — service must start on reboot (one command, not done yet)
+- [x] **`sudo systemctl enable puhti-run`** — done, service starts on reboot
 
 ## Should Do Soon
 
