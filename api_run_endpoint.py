@@ -1,8 +1,9 @@
 """
 Complete /run-code API router — submit, status, logs, results.
 """
-import io, os, uuid, time, shutil, subprocess, sqlite3, zipfile, contextlib, base64, re
+import io, os, uuid, time, shutil, subprocess, sqlite3, zipfile, contextlib, base64, re, logging
 import urllib.request, urllib.error, json, smtplib
+from logging.handlers import RotatingFileHandler
 from email.mime.text import MIMEText
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Header, Request
 import collections, threading
