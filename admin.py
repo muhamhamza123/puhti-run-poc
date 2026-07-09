@@ -869,7 +869,15 @@ pre.billing{background:var(--bg3);border:1px solid var(--border);border-radius:6
       </div>
     </div>
     <div class="tbl-box" style="margin-bottom:16px">
-      <div class="tbl-header"><h3>GPU Nodes</h3></div>
+      <div class="tbl-header">
+        <h3>GPU Nodes</h3>
+        <span class="chip" id="gpu-count">0</span>
+        <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+          <button class="btn sm ghost" id="gpu-prev" onclick="gpuPage(-1)">◀</button>
+          <span id="gpu-page-label" style="font-size:11px;color:var(--text2)">—</span>
+          <button class="btn sm ghost" id="gpu-next" onclick="gpuPage(1)">▶</button>
+        </div>
+      </div>
       <div class="tbl-wrap">
       <table>
         <thead><tr><th>Node</th><th>State</th><th>GPUs</th><th>CPUs Alloc</th><th>CPUs Total</th></tr></thead>
@@ -1100,6 +1108,34 @@ function renderUsers(rows){
 }
 
 let _allNodes = [];
+let _allGpuNodes = [];
+let _gpuPage = 0;
+const _GPU_PAGE_SIZE = 10;
+
+function gpuPage(dir){
+  const pages=Math.ceil(_allGpuNodes.length/_GPU_PAGE_SIZE)||1;
+  _gpuPage=Math.max(0,Math.min(_gpuPage+dir,pages-1));
+  renderGpuPage();
+}
+function renderGpuPage(){
+  const pages=Math.ceil(_allGpuNodes.length/_GPU_PAGE_SIZE)||1;
+  const start=_gpuPage*_GPU_PAGE_SIZE;
+  const slice=_allGpuNodes.slice(start,start+_GPU_PAGE_SIZE);
+  document.getElementById('gpu-page-label').textContent=`${_gpuPage+1} / ${pages}`;
+  document.getElementById('gpu-prev').disabled=_gpuPage===0;
+  document.getElementById('gpu-next').disabled=_gpuPage>=pages-1;
+  document.getElementById('gpu-body').innerHTML=slice.map(n=>{
+    const stateCol=n.state.includes('idle')?'var(--green)':n.state.includes('alloc')?'var(--blue)':n.state.includes('drain')||n.state.includes('down')?'var(--red)':'var(--orange)';
+    return `<tr>
+      <td style="font-family:monospace;font-size:11px">${n.node}</td>
+      <td><span style="color:${stateCol}">${n.state}</span></td>
+      <td style="font-size:11px;color:var(--text2)">${n.gres||'—'}</td>
+      <td>${n.cpus_alloc}</td>
+      <td>${n.cpus_total}</td>
+    </tr>`;
+  }).join('')||'<tr><td colspan="5" style="color:var(--text2);padding:12px">No GPU nodes or not available</td></tr>';
+}
+
 function filterNodes(){
   const f = document.getElementById('node-state-filter').value.toLowerCase();
   const rows = f ? _allNodes.filter(n=>n.state.toLowerCase().includes(f)) : _allNodes;
@@ -1190,17 +1226,11 @@ async function loadPuhti(force=false){
   document.getElementById('node-count').textContent=_allNodes.length;
   filterNodes();
 
-  // GPU nodes
-  document.getElementById('gpu-body').innerHTML=(data.gpu_nodes||[]).map(n=>{
-    const stateCol=n.state.includes('idle')?'var(--green)':n.state.includes('alloc')?'var(--blue)':n.state.includes('drain')||n.state.includes('down')?'var(--red)':'var(--orange)';
-    return `<tr>
-      <td style="font-family:monospace;font-size:11px">${n.node}</td>
-      <td><span style="color:${stateCol}">${n.state}</span></td>
-      <td style="font-size:11px;color:var(--text2)">${n.gres||'—'}</td>
-      <td>${n.cpus_alloc}</td>
-      <td>${n.cpus_total}</td>
-    </tr>`;
-  }).join('')||'<tr><td colspan="5" style="color:var(--text2);padding:12px">No GPU nodes or not available</td></tr>';
+  // GPU nodes with pagination
+  _allGpuNodes = data.gpu_nodes||[];
+  _gpuPage = 0;
+  document.getElementById('gpu-count').textContent=_allGpuNodes.length;
+  renderGpuPage();
 
   // Pending reasons
   const pr=data.pending_reasons||[];
