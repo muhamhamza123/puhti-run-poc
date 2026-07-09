@@ -195,7 +195,7 @@ def _puhti_data() -> dict:
     except Exception:
         data['scratch_total'] = '?'
 
-    # Per-user scratch usage
+    # Per-user scratch usage (Puhti has user subdirs)
     try:
         out = _ssh(f'du -sh {PUHTI_RUNS}/*/ 2>/dev/null')
         user_disk = []
@@ -203,6 +203,9 @@ def _puhti_data() -> dict:
             parts = line.split()
             if len(parts) == 2:
                 user = parts[1].rstrip('/').split('/')[-1]
+                # skip UUID-looking entries (job dirs at wrong level)
+                if len(user) == 36 and user.count('-') == 4:
+                    continue
                 user_disk.append({'user': user, 'size': parts[0]})
         data['user_disk'] = user_disk
     except Exception:
@@ -378,51 +381,47 @@ _ADMIN_HTML = '''<!doctype html>
 <html><head><title>Puhti Admin</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: #0f172a; color: #f1f5f9; min-height: 100vh; }
-nav { background: #1e293b; padding: 12px 24px; display: flex; align-items: center;
-  gap: 16px; border-bottom: 1px solid #334155; }
-nav h1 { font-size: 16px; font-weight: 700; flex: 1; }
-nav span { font-size: 12px; color: #94a3b8; }
-nav a { font-size: 12px; color: #94a3b8; text-decoration: none; }
-nav a:hover { color: #f1f5f9; }
-.tabs { display: flex; gap: 2px; background: #1e293b; padding: 0 24px;
-  border-bottom: 1px solid #334155; }
-.tab { padding: 10px 16px; font-size: 13px; cursor: pointer; border: none;
-  background: none; color: #94a3b8; border-bottom: 2px solid transparent; }
-.tab.active { color: #f1f5f9; border-bottom-color: #3b82f6; }
-.panel { display: none; padding: 24px; }
-.panel.active { display: block; }
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap: 12px; margin-bottom: 20px; }
-.card { background: #1e293b; border-radius: 8px; padding: 16px; }
-.card .val { font-size: 28px; font-weight: 700; color: #3b82f6; }
-.card .lbl { font-size: 11px; color: #94a3b8; margin-top: 4px; text-transform: uppercase; letter-spacing: .5px; }
-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-th { text-align: left; padding: 8px 10px; color: #94a3b8; font-weight: 600;
-  border-bottom: 1px solid #334155; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
-td { padding: 7px 10px; border-bottom: 1px solid #1e293b; }
-tr:hover td { background: #1e293b; }
-.badge { padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; }
-.badge.done { background: #064e3b; color: #34d399; }
-.badge.failed { background: #450a0a; color: #f87171; }
-.badge.queued { background: #431407; color: #fb923c; }
-.badge.running { background: #1e3a5f; color: #60a5fa; }
-.badge.cancelled { background: #1e293b; color: #94a3b8; }
-.badge.pending { background: #431407; color: #fb923c; }
-.badge.merged { background: #064e3b; color: #34d399; }
-.badge.closed { background: #1e293b; color: #94a3b8; }
-.filters { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
-input, select { background: #1e293b; border: 1px solid #334155; color: #f1f5f9;
-  padding: 6px 10px; border-radius: 6px; font-size: 12px; }
-button.action { background: #3b82f6; color: white; border: none; padding: 6px 14px;
-  border-radius: 6px; font-size: 12px; cursor: pointer; }
-button.action:hover { background: #2563eb; }
-.section-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; color: #e2e8f0; }
-.refresh-bar { font-size: 11px; color: #64748b; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
-.tbl-wrap { overflow-x: auto; }
-pre.billing { background: #1e293b; border-radius: 8px; padding: 12px; font-size: 11px;
-  color: #94a3b8; white-space: pre-wrap; margin-bottom: 16px; }
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0f172a;color:#f1f5f9;min-height:100vh;font-size:13px}
+nav{background:#1e293b;padding:10px 20px;display:flex;align-items:center;gap:12px;border-bottom:1px solid #334155;position:sticky;top:0;z-index:10}
+nav h1{font-size:15px;font-weight:700;flex:1}
+nav span{font-size:11px;color:#94a3b8}
+nav a{font-size:11px;color:#64748b;text-decoration:none;padding:4px 10px;border:1px solid #334155;border-radius:5px}
+nav a:hover{color:#f1f5f9;border-color:#64748b}
+.tabs{display:flex;background:#1e293b;padding:0 20px;border-bottom:1px solid #334155;gap:2px}
+.tab{padding:9px 16px;font-size:12px;cursor:pointer;border:none;background:none;color:#64748b;border-bottom:2px solid transparent;white-space:nowrap}
+.tab.active{color:#f1f5f9;border-bottom-color:#3b82f6}
+.panel{display:none;padding:20px;max-width:1400px}
+.panel.active{display:block}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:20px}
+.card{background:#1e293b;border-radius:8px;padding:14px 16px}
+.card .val{font-size:26px;font-weight:700;color:#3b82f6;line-height:1}
+.card .lbl{font-size:10px;color:#64748b;margin-top:5px;text-transform:uppercase;letter-spacing:.5px}
+.section{margin-bottom:24px}
+.section-title{font-size:12px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid #1e293b}
+.tbl-wrap{overflow-x:auto;border-radius:8px;border:1px solid #1e293b}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;padding:7px 10px;color:#64748b;font-weight:600;background:#1e293b;font-size:10px;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap}
+td{padding:6px 10px;border-top:1px solid #1e293b;white-space:nowrap}
+tr:hover td{background:#1a2744}
+.badge{padding:1px 7px;border-radius:20px;font-size:10px;font-weight:700;display:inline-block}
+.badge.done,.badge.up,.badge.merged{background:#064e3b;color:#34d399}
+.badge.failed,.badge.down,.badge.closed{background:#450a0a;color:#f87171}
+.badge.queued,.badge.pending{background:#431407;color:#fb923c}
+.badge.running{background:#1e3a5f;color:#60a5fa}
+.badge.cancelled{background:#1e293b;color:#64748b}
+.filters{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center}
+.filters label{font-size:11px;color:#64748b}
+input,select{background:#1e293b;border:1px solid #334155;color:#f1f5f9;padding:5px 9px;border-radius:5px;font-size:12px;height:30px}
+input:focus,select:focus{outline:none;border-color:#3b82f6}
+button.act{background:#3b82f6;color:white;border:none;padding:5px 12px;border-radius:5px;font-size:11px;cursor:pointer;height:30px}
+button.act:hover{background:#2563eb}
+button.act.sm{height:24px;padding:3px 8px;font-size:10px}
+.refresh-info{font-size:10px;color:#475569;display:flex;align-items:center;gap:8px;margin-bottom:14px}
+pre.billing{background:#1e293b;border-radius:6px;padding:10px 12px;font-size:11px;color:#94a3b8;white-space:pre-wrap;border:1px solid #334155}
+.search-row{display:flex;gap:8px;margin-bottom:10px}
+.search-row input{flex:1;max-width:280px}
+.count-badge{background:#334155;color:#94a3b8;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:600}
 </style>
 </head><body>
 
@@ -441,79 +440,99 @@ pre.billing { background: #1e293b; border-radius: 8px; padding: 12px; font-size:
 
 <!-- OVERVIEW -->
 <div id="tab-overview" class="panel active">
-  <div class="grid" id="overview-cards">
+  <div class="grid">
     <div class="card"><div class="val" id="ov-total">…</div><div class="lbl">Total Jobs</div></div>
-    <div class="card"><div class="val" id="ov-active">…</div><div class="lbl">Active Jobs</div></div>
-    <div class="card"><div class="val" id="ov-done">…</div><div class="lbl">Completed Today</div></div>
+    <div class="card"><div class="val" id="ov-active" style="color:#60a5fa">…</div><div class="lbl">Active Now</div></div>
+    <div class="card"><div class="val" id="ov-done" style="color:#34d399">…</div><div class="lbl">Completed</div></div>
+    <div class="card"><div class="val" id="ov-failed" style="color:#f87171">…</div><div class="lbl">Failed</div></div>
     <div class="card"><div class="val" id="ov-users">…</div><div class="lbl">Total Users</div></div>
-    <div class="card"><div class="val" id="ov-pending-pr">…</div><div class="lbl">Pending Container PRs</div></div>
-    <div class="card"><div class="val" id="ov-scratch">…</div><div class="lbl">Scratch Used</div></div>
+    <div class="card"><div class="val" id="ov-pending-pr" style="color:#fb923c">…</div><div class="lbl">Pending PRs</div></div>
+    <div class="card"><div class="val" id="ov-scratch" style="color:#a78bfa">…</div><div class="lbl">Scratch Used</div></div>
+    <div class="card"><div class="val" id="ov-cpu-hours" style="color:#fb923c">…</div><div class="lbl">CPU Hours (month)</div></div>
   </div>
-  <div class="section-title">Per-user summary</div>
-  <div class="tbl-wrap">
-  <table>
-    <thead><tr><th>User</th><th>Total</th><th>Active</th><th>Done</th><th>Failed</th><th>Last Active</th></tr></thead>
-    <tbody id="stats-body"></tbody>
-  </table>
+
+  <div class="section">
+    <div class="section-title">Users <span class="count-badge" id="user-count">0</span></div>
+    <div class="search-row">
+      <input id="user-search" placeholder="Search users…" oninput="filterUsers()">
+    </div>
+    <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>User</th><th>Total</th><th>Active</th><th>Done</th><th>Failed</th><th>Cancelled</th><th>Last Active</th></tr></thead>
+      <tbody id="stats-body"></tbody>
+    </table>
+    </div>
   </div>
 </div>
 
 <!-- PUHTI SYSTEM -->
 <div id="tab-puhti" class="panel">
-  <div class="refresh-bar">
-    <span id="puhti-age">…</span>
-    <button class="action" onclick="refreshPuhti()">↻ Force refresh</button>
+  <div class="refresh-info">
+    <span id="puhti-age">Loading…</span>
+    <button class="act sm" onclick="refreshPuhti()">↻ Force refresh</button>
   </div>
 
-  <div class="section-title">Billing Units</div>
-  <pre class="billing" id="billing-text">Loading…</pre>
-
-  <div class="section-title">Scratch Disk Usage</div>
-  <div class="tbl-wrap">
-  <table>
-    <thead><tr><th>User</th><th>Disk Used</th></tr></thead>
-    <tbody id="disk-body"></tbody>
-  </table>
+  <div class="section">
+    <div class="section-title">Billing Units — project_2014823</div>
+    <pre class="billing" id="billing-text">Loading…</pre>
   </div>
 
-  <div class="section-title" style="margin-top:20px">Monthly CPU Usage (this month)</div>
-  <div class="tbl-wrap">
-  <table>
-    <thead><tr><th>User</th><th>CPU Hours</th><th>Jobs</th></tr></thead>
-    <tbody id="usage-body"></tbody>
-  </table>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:24px">
+    <div class="section">
+      <div class="section-title">Scratch Disk by User</div>
+      <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>User</th><th>Disk Used</th></tr></thead>
+        <tbody id="disk-body"></tbody>
+      </table>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-title">CPU Hours This Month</div>
+      <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>User</th><th>CPU Hours</th><th>Jobs</th></tr></thead>
+        <tbody id="usage-body"></tbody>
+      </table>
+      </div>
+    </div>
   </div>
 
-  <div class="section-title" style="margin-top:20px">Current Puhti Queue (project_2014823)</div>
-  <div class="tbl-wrap">
-  <table>
-    <thead><tr><th>User</th><th>Slurm Job</th><th>Partition</th><th>State</th><th>Time Limit</th></tr></thead>
-    <tbody id="queue-body"></tbody>
-  </table>
+  <div class="section">
+    <div class="section-title">Current Queue — project_2014823 <span class="count-badge" id="queue-count">0</span></div>
+    <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>User</th><th>Slurm Job</th><th>Partition</th><th>State</th><th>Time Limit</th></tr></thead>
+      <tbody id="queue-body"></tbody>
+    </table>
+    </div>
   </div>
 
-  <div class="section-title" style="margin-top:20px">Partition Status</div>
-  <div class="tbl-wrap">
-  <table>
-    <thead><tr><th>Partition</th><th>Available</th><th>Nodes</th><th>CPUs Alloc</th><th>CPUs Idle</th><th>CPUs Total</th></tr></thead>
-    <tbody id="partition-body"></tbody>
-  </table>
+  <div class="section">
+    <div class="section-title">Partition Status</div>
+    <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Partition</th><th>Status</th><th>Nodes</th><th>CPUs Alloc</th><th>CPUs Idle</th><th>CPUs Total</th><th>% Used</th></tr></thead>
+      <tbody id="partition-body"></tbody>
+    </table>
+    </div>
   </div>
 </div>
 
 <!-- ALL JOBS -->
 <div id="tab-jobs" class="panel">
   <div class="filters">
-    <input id="filter-user" placeholder="Filter by username" oninput="loadJobs()">
+    <input id="filter-user" placeholder="Filter by username…" oninput="loadJobs()" style="max-width:200px">
     <select id="filter-status" onchange="loadJobs()">
       <option value="">All statuses</option>
       <option>queued</option><option>running</option>
       <option>done</option><option>failed</option><option>cancelled</option>
     </select>
+    <span class="count-badge" id="jobs-count">0</span>
   </div>
   <div class="tbl-wrap">
   <table>
-    <thead><tr><th>Job ID</th><th>Slurm</th><th>User</th><th>Status</th><th>Partition</th><th>CPUs</th><th>RAM</th><th>Created</th></tr></thead>
+    <thead><tr><th>Job ID</th><th>Slurm</th><th>User</th><th>Status</th><th>Partition</th><th>CPUs</th><th>RAM</th><th>Submitted</th></tr></thead>
     <tbody id="jobs-body"></tbody>
   </table>
   </div>
@@ -521,6 +540,7 @@ pre.billing { background: #1e293b; border-radius: 8px; padding: 12px; font-size:
 
 <!-- CONTAINER REQUESTS -->
 <div id="tab-containers" class="panel">
+  <div class="section-title" style="margin-bottom:12px">Container Requests <span class="count-badge" id="cr-count">0</span></div>
   <div class="tbl-wrap">
   <table>
     <thead><tr><th>User</th><th>Container</th><th>Status</th><th>PR</th><th>Requested</th></tr></thead>
@@ -531,93 +551,107 @@ pre.billing { background: #1e293b; border-radius: 8px; padding: 12px; font-size:
 
 <script>
 const BASE = '__BASE__';
-let puhtiData = null;
-let puhtiLoadedAt = null;
+let _allStats = [];
 
 function showTab(name) {
-  document.querySelectorAll('.tab').forEach((t,i) => t.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   const idx = ['overview','puhti','jobs','containers'].indexOf(name);
   document.querySelectorAll('.tab')[idx].classList.add('active');
   document.getElementById('tab-'+name).classList.add('active');
-  if (name === 'overview') { loadStats(); loadPuhti(); loadContainerRequests(); }
-  if (name === 'puhti') { loadPuhti(); }
-  if (name === 'jobs') { loadJobs(); }
-  if (name === 'containers') { loadContainerRequests(); }
+  if (name==='overview') { loadStats(); loadPuhti(); loadContainerRequests(); }
+  if (name==='puhti') loadPuhti();
+  if (name==='jobs') loadJobs();
+  if (name==='containers') loadContainerRequests();
 }
 
 async function api(path) {
-  const r = await fetch(BASE + path, {credentials: 'include'});
-  if (r.status === 302 || r.status === 401) { location.href = BASE + '/admin/login'; return null; }
+  const r = await fetch(BASE+path, {credentials:'include'});
+  if (r.status===302||r.status===401) { location.href=BASE+'/admin/login'; return null; }
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
 
-function badge(status) {
-  return `<span class="badge ${status}">${status}</span>`;
+const badge = s => `<span class="badge ${s}">${s}</span>`;
+const fmt = dt => dt ? new Date(dt.replace(' ','T')+'Z').toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '—';
+const pct = (a,t) => t>0 ? Math.round(a/t*100)+'%' : '—';
+
+function filterUsers() {
+  const q = document.getElementById('user-search').value.toLowerCase();
+  const rows = _allStats.filter(r => !q || (r.username||'').toLowerCase().includes(q));
+  renderStats(rows);
 }
 
-function fmt(dt) {
-  if (!dt) return '—';
-  return new Date(dt.replace(' ','T')+'Z').toLocaleString(undefined,
-    {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+function renderStats(rows) {
+  document.getElementById('stats-body').innerHTML = rows.map(r => `<tr>
+    <td><a href="#" onclick="jumpToJobs('${r.username||''}');return false" style="color:#60a5fa;text-decoration:none">${r.username||'(anon)'}</a></td>
+    <td>${r.total}</td>
+    <td>${r.active ? badge('running')+' '+r.active : '<span style="color:#475569">0</span>'}</td>
+    <td><span style="color:#34d399">${r.done}</span></td>
+    <td>${r.failed ? '<span style="color:#f87171">'+r.failed+'</span>' : '<span style="color:#475569">0</span>'}</td>
+    <td><span style="color:#475569">${r.cancelled||0}</span></td>
+    <td style="color:#64748b">${fmt(r.last_active)}</td>
+  </tr>`).join('') || '<tr><td colspan="7" style="color:#475569;padding:12px">No users yet</td></tr>';
+}
+
+function jumpToJobs(username) {
+  showTab('jobs');
+  document.getElementById('filter-user').value = username;
+  loadJobs();
 }
 
 async function loadStats() {
   const data = await api('/admin/stats');
   if (!data) return;
-  const rows = data.stats;
-  document.getElementById('ov-users').textContent = rows.length;
-  document.getElementById('ov-total').textContent = rows.reduce((s,r)=>s+r.total,0);
-  document.getElementById('ov-active').textContent = rows.reduce((s,r)=>s+r.active,0);
-  document.getElementById('ov-done').textContent = rows.reduce((s,r)=>s+r.done,0);
-  const tbody = document.getElementById('stats-body');
-  tbody.innerHTML = rows.map(r => `<tr>
-    <td>${r.username||'(anon)'}</td>
-    <td>${r.total}</td>
-    <td>${r.active ? '<span class="badge running">'+r.active+'</span>' : '0'}</td>
-    <td>${r.done}</td>
-    <td>${r.failed ? '<span class="badge failed">'+r.failed+'</span>' : '0'}</td>
-    <td>${fmt(r.last_active)}</td>
-  </tr>`).join('');
+  _allStats = data.stats;
+  document.getElementById('ov-users').textContent = _allStats.length;
+  document.getElementById('ov-total').textContent = _allStats.reduce((s,r)=>s+r.total,0);
+  document.getElementById('ov-active').textContent = _allStats.reduce((s,r)=>s+r.active,0);
+  document.getElementById('ov-done').textContent = _allStats.reduce((s,r)=>s+r.done,0);
+  document.getElementById('ov-failed').textContent = _allStats.reduce((s,r)=>s+r.failed,0);
+  document.getElementById('user-count').textContent = _allStats.length;
+  filterUsers();
 }
 
 async function loadPuhti(force=false) {
-  const path = force ? '/admin/refresh-puhti' : '/admin/puhti';
-  const data = await api(path);
+  const data = await api(force?'/admin/refresh-puhti':'/admin/puhti');
   if (!data) return;
-  puhtiData = data;
-  puhtiLoadedAt = new Date();
 
-  document.getElementById('puhti-age').textContent =
-    'Last updated: ' + puhtiLoadedAt.toLocaleTimeString();
-  document.getElementById('ov-scratch').textContent =
-    data.scratch_total || '?';
-  document.getElementById('billing-text').textContent =
-    data.billing || 'unavailable';
+  document.getElementById('puhti-age').textContent = 'Last updated: '+new Date().toLocaleTimeString()+' (cache 60s)';
+  document.getElementById('ov-scratch').textContent = data.scratch_total||'?';
+  document.getElementById('billing-text').textContent = data.billing||'unavailable';
+
+  const totalCPU = (data.monthly_usage||[]).reduce((s,r)=>s+r.cpu_hours,0);
+  document.getElementById('ov-cpu-hours').textContent = Math.round(totalCPU);
 
   document.getElementById('disk-body').innerHTML =
     (data.user_disk||[]).map(r=>`<tr><td>${r.user}</td><td>${r.size}</td></tr>`).join('') ||
-    '<tr><td colspan="2" style="color:#64748b">No data</td></tr>';
+    '<tr><td colspan="2" style="color:#475569">No data</td></tr>';
 
   document.getElementById('usage-body').innerHTML =
     (data.monthly_usage||[]).map(r=>`<tr><td>${r.user}</td><td>${r.cpu_hours}</td><td>${r.jobs}</td></tr>`).join('') ||
-    '<tr><td colspan="3" style="color:#64748b">No data</td></tr>';
+    '<tr><td colspan="3" style="color:#475569">No data</td></tr>';
 
-  document.getElementById('queue-body').innerHTML =
-    (data.queue||[]).map(r=>`<tr>
-      <td>${r.user}</td><td>${r.job_id}</td><td>${r.partition}</td>
-      <td>${badge(r.state.toLowerCase())}</td><td>${r.time_limit}</td>
-    </tr>`).join('') ||
-    '<tr><td colspan="5" style="color:#64748b">Queue empty</td></tr>';
+  const queue = data.queue||[];
+  document.getElementById('queue-count').textContent = queue.length;
+  document.getElementById('queue-body').innerHTML = queue.map(r=>`<tr>
+    <td>${r.user}</td><td style="font-family:monospace">${r.job_id}</td>
+    <td>${r.partition}</td><td>${badge(r.state.toLowerCase())}</td><td>${r.time_limit}</td>
+  </tr>`).join('') || '<tr><td colspan="5" style="color:#475569;padding:10px">Queue empty</td></tr>';
 
   document.getElementById('partition-body').innerHTML =
     (data.partitions||[]).map(r=>`<tr>
-      <td>${r.partition}</td>
-      <td><span class="badge ${r.available==='up'?'done':'failed'}">${r.available}</span></td>
-      <td>${r.nodes}</td><td>${r.cpus_alloc}</td><td>${r.cpus_idle}</td><td>${r.cpus_total}</td>
-    </tr>`).join('') ||
-    '<tr><td colspan="6" style="color:#64748b">No data</td></tr>';
+      <td style="font-weight:600">${r.partition}</td>
+      <td>${badge(r.available)}</td>
+      <td>${r.nodes}</td>
+      <td>${r.cpus_alloc}</td>
+      <td style="color:#34d399">${r.cpus_idle}</td>
+      <td>${r.cpus_total}</td>
+      <td><div style="background:#334155;border-radius:4px;height:6px;width:80px;overflow:hidden">
+        <div style="background:#3b82f6;height:100%;width:${pct(r.cpus_alloc,r.cpus_total)}"></div></div>
+        <span style="font-size:10px;color:#64748b">${pct(r.cpus_alloc,r.cpus_total)}</span>
+      </td>
+    </tr>`).join('') || '<tr><td colspan="7" style="color:#475569">No data</td></tr>';
 }
 
 async function refreshPuhti() { await loadPuhti(true); }
@@ -626,47 +660,47 @@ async function loadJobs() {
   const user = document.getElementById('filter-user').value.trim();
   const status = document.getElementById('filter-status').value;
   let path = '/admin/jobs?';
-  if (user) path += 'username=' + encodeURIComponent(user) + '&';
-  if (status) path += 'status=' + encodeURIComponent(status);
+  if (user) path += 'username='+encodeURIComponent(user)+'&';
+  if (status) path += 'status='+encodeURIComponent(status);
   const data = await api(path);
   if (!data) return;
-  document.getElementById('jobs-body').innerHTML = data.jobs.map(j => `<tr>
-    <td style="font-family:monospace;font-size:11px">${j.job_id.slice(0,8)}</td>
-    <td>${j.slurm_id||'—'}</td>
-    <td>${j.username||'—'}</td>
+  document.getElementById('jobs-count').textContent = data.jobs.length;
+  document.getElementById('jobs-body').innerHTML = data.jobs.map(j=>`<tr>
+    <td style="font-family:monospace;font-size:10px;color:#64748b">${j.job_id.slice(0,8)}</td>
+    <td style="font-family:monospace">${j.slurm_id||'—'}</td>
+    <td><a href="#" onclick="jumpToJobs('${j.username||''}');return false" style="color:#60a5fa;text-decoration:none">${j.username||'—'}</a></td>
     <td>${badge(j.status)}</td>
     <td>${j.partition||'—'}</td>
     <td>${j.cpus||'—'}</td>
-    <td>${j.memory_gb ? j.memory_gb+'GB' : '—'}</td>
-    <td>${fmt(j.created)}</td>
-  </tr>`).join('') || '<tr><td colspan="8" style="color:#64748b">No jobs found</td></tr>';
+    <td>${j.memory_gb?j.memory_gb+'GB':'—'}</td>
+    <td style="color:#64748b">${fmt(j.created)}</td>
+  </tr>`).join('') || '<tr><td colspan="8" style="color:#475569;padding:12px">No jobs found</td></tr>';
 }
 
 async function loadContainerRequests() {
   const data = await api('/admin/container-requests');
   if (!data) return;
-  document.getElementById('ov-pending-pr').textContent =
-    data.requests.filter(r=>r.status==='pending').length;
+  const pending = data.requests.filter(r=>r.status==='pending').length;
+  document.getElementById('ov-pending-pr').textContent = pending;
+  document.getElementById('cr-count').textContent = data.requests.length;
   document.getElementById('containers-body').innerHTML =
-    data.requests.map(r => `<tr>
+    data.requests.map(r=>`<tr>
       <td>${r.username||'—'}</td>
-      <td>${r.container}</td>
+      <td style="font-weight:600">${r.container}</td>
       <td>${badge(r.status)}</td>
       <td><a href="${r.pr_url}" target="_blank" style="color:#60a5fa">PR #${r.pr_number}</a></td>
-      <td>${fmt(r.created)}</td>
-    </tr>`).join('') || '<tr><td colspan="5" style="color:#64748b">No requests</td></tr>';
+      <td style="color:#64748b">${fmt(r.created)}</td>
+    </tr>`).join('') || '<tr><td colspan="5" style="color:#475569;padding:12px">No requests</td></tr>';
 }
 
-// Auto-refresh every 60s
-setInterval(() => {
-  const active = document.querySelector('.panel.active');
-  if (active.id === 'tab-overview') { loadStats(); loadPuhti(); }
-  if (active.id === 'tab-puhti') { loadPuhti(); }
-  if (active.id === 'tab-jobs') { loadJobs(); }
-  if (active.id === 'tab-containers') { loadContainerRequests(); }
+setInterval(()=>{
+  const id = document.querySelector('.panel.active')?.id;
+  if (id==='tab-overview') { loadStats(); loadPuhti(); }
+  if (id==='tab-puhti') loadPuhti();
+  if (id==='tab-jobs') loadJobs();
+  if (id==='tab-containers') loadContainerRequests();
 }, 60000);
 
-// Initial load
 loadStats(); loadPuhti(); loadContainerRequests();
 </script>
 </body></html>'''
