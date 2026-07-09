@@ -1040,7 +1040,7 @@ setInterval(()=>{
   if(id==='page-users')loadStats();
   if(id==='page-containers')loadContainerRequests();
   if(id==='page-puhti')loadPuhti();
-},60000);
+},900000);
 
 window.addEventListener('resize',()=>{
   if(_history.length)drawHistoryChart('chart-history',_history);
