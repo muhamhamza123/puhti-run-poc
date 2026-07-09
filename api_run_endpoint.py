@@ -349,23 +349,6 @@ def run_results(job_id: str):
     )
 
 
-LABEL_RULES = {
-    'hydrology':  {'xarray', 'netcdf4', 'rasterio', 'geopandas', 'fiona', 'shapely', 'pysheds', 'hydromt'},
-    'ml':         {'torch', 'tensorflow', 'keras', 'scikit-learn', 'sklearn', 'xgboost', 'lightgbm', 'transformers', 'huggingface'},
-    'geospatial': {'gdal', 'rasterio', 'geopandas', 'cartopy', 'pyproj', 'shapely', 'fiona'},
-}
-
-
-def _detect_labels(packages: list[str]) -> list[str]:
-    pkg_set = {p.lower().split('==')[0].split('>=')[0].strip() for p in packages}
-    labels = ['container-request']
-    for label, keywords in LABEL_RULES.items():
-        if pkg_set & keywords:
-            labels.append(label)
-    if not any(l in labels for l in LABEL_RULES):
-        labels.append('general')
-    return labels
-
 
 def _parse_packages_from_def(content: bytes) -> list[str]:
     packages = []
@@ -508,13 +491,6 @@ async def _open_container_pr(name: str, content: bytes, description: str, packag
         'head':  branch,
         'base':  default_br,
     })
-
-    # Auto-label
-    labels = _detect_labels(packages)
-    try:
-        _gh('POST', f'/issues/{pr["number"]}/labels', {'labels': labels})
-    except Exception:
-        pass
 
     # Store request for notification tracking
     if username:
