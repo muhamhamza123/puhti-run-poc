@@ -1097,6 +1097,17 @@ function barHTML(used,total){
 }
 
 // ── Charts ────────────────────────────────────────────────────────────────────
+// Shared tooltip element
+let _tooltip = null;
+function _getTooltip(){
+  if(!_tooltip){
+    _tooltip=document.createElement('div');
+    _tooltip.style.cssText='position:fixed;background:#1c2128;border:1px solid #30363d;border-radius:6px;padding:8px 12px;font-size:11px;color:#e6edf3;pointer-events:none;display:none;z-index:999;line-height:1.6;box-shadow:0 4px 12px rgba(0,0,0,.4)';
+    document.body.appendChild(_tooltip);
+  }
+  return _tooltip;
+}
+
 function drawHistoryChart(canvasId, data) {
   const canvas = document.getElementById(canvasId);
   if(!canvas) return;
@@ -1123,22 +1134,26 @@ function drawHistoryChart(canvasId, data) {
     ctx.fillText(Math.round(maxVal*i/4),pad.l-4,y+3);
   }
 
-  // Bars
+  // Build hit areas for tooltip
+  const hitAreas=[];
   data.forEach((d,i)=>{
     const x=pad.l+i*(cW/data.length);
-    const drawBar=(val,color,yOff)=>{
-      const h=Math.max(1,(val/maxVal)*cH);
-      ctx.fillStyle=color;
-      ctx.fillRect(x+1,pad.t+cH-yOff-h,barW,h);
-      return h;
-    };
+    const segments=[
+      {label:'Failed',  val:d.failed,   color:'rgba(248,81,73,0.85)'},
+      {label:'Cancelled',val:d.cancelled,color:'rgba(139,148,158,0.5)'},
+      {label:'Done',    val:d.done,     color:'rgba(63,185,80,0.85)'},
+    ];
     let off=0;
-    off+=drawBar(d.failed,'rgba(248,81,73,0.85)',off);
-    off+=drawBar(d.cancelled,'rgba(139,148,158,0.5)',off);
-    off+=drawBar(d.done,'rgba(63,185,80,0.85)',off);
+    segments.forEach(seg=>{
+      const h=Math.max(1,(seg.val/maxVal)*cH);
+      ctx.fillStyle=seg.color;
+      ctx.fillRect(x+1,pad.t+cH-off-h,barW,h);
+      hitAreas.push({x1:x+1,x2:x+1+barW,y1:pad.t+cH-off-h,y2:pad.t+cH-off,day:d.day,label:seg.label,val:seg.val,total:d.total});
+      off+=h;
+    });
   });
 
-  // X labels — show every Nth
+  // X labels
   const step=Math.max(1,Math.floor(data.length/8));
   ctx.fillStyle='#8b949e';ctx.font='9px sans-serif';ctx.textAlign='center';
   data.forEach((d,i)=>{
@@ -1157,6 +1172,27 @@ function drawHistoryChart(canvasId, data) {
     ctx.fillStyle='#8b949e';ctx.font='9px sans-serif';ctx.textAlign='left';
     ctx.fillText(lbl,lx+13,13);
   });
+
+  // Hover tooltip
+  canvas.onmousemove=function(e){
+    const rect=canvas.getBoundingClientRect();
+    const mx=(e.clientX-rect.left)*(W/rect.width);
+    const my=(e.clientY-rect.top)*(H/rect.height);
+    const tip=_getTooltip();
+    const hit=hitAreas.find(a=>mx>=a.x1&&mx<=a.x2&&my>=a.y1&&my<=a.y2);
+    if(hit&&hit.val>0){
+      const parts=hit.day.split('-');
+      tip.innerHTML=`<strong>${parts[1]}/${parts[2]}</strong><br>
+        <span style="color:#8b949e">Total: ${hit.total}</span><br>
+        <span style="color:${hit.label==='Done'?'#3fb950':hit.label==='Failed'?'#f85149':'#8b949e'}">${hit.label}: <strong>${hit.val}</strong></span>`;
+      tip.style.display='block';
+      tip.style.left=(e.clientX+14)+'px';
+      tip.style.top=(e.clientY-10)+'px';
+    } else {
+      tip.style.display='none';
+    }
+  };
+  canvas.onmouseleave=()=>{ _getTooltip().style.display='none'; };
 }
 
 function drawPartitionChart(canvasId, partitions) {
