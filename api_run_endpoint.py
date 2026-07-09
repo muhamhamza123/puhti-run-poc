@@ -86,10 +86,12 @@ def _db():
     return conn
 
 
-def _insert(job_id, slurm_id, partition, username='', email=''):
+def _insert(job_id, slurm_id, partition, username='', email='', cpus=0, memory_gb=0):
     with contextlib.closing(_db()) as db:
-        db.execute("INSERT INTO runs (job_id, slurm_id, partition, username, email) VALUES (?,?,?,?,?)",
-                   (job_id, slurm_id, partition, username, email))
+        db.execute(
+            "INSERT INTO runs (job_id, slurm_id, partition, username, email, cpus, memory_gb) VALUES (?,?,?,?,?,?,?)",
+            (job_id, slurm_id, partition, username, email, cpus, memory_gb)
+        )
         db.commit()
 
 
@@ -724,7 +726,7 @@ async def _submit_job(job_id: str, job_dir: str, partition: str,
         raise HTTPException(500, f'sbatch failed: {r.stderr.strip()}')
 
     slurm_id = r.stdout.strip().split()[-1]
-    _insert(job_id, slurm_id, partition, username, email)
+    _insert(job_id, slurm_id, partition, username, email, cpus, memory_gb)
     return {'job_id': job_id, 'slurm_id': slurm_id, 'status': 'queued'}
 
 
