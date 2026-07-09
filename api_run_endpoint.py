@@ -3,7 +3,7 @@ Complete /run-code API router — submit, status, logs, results.
 """
 import io, os, uuid, shutil, subprocess, sqlite3, zipfile, contextlib, base64, re
 import urllib.request, urllib.error, json
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Header
 from fastapi.responses import StreamingResponse
 from typing import Optional
 
@@ -21,8 +21,25 @@ VALID_PARTITIONS  = {'small', 'large', 'longrun', 'gpu', 'gpumedium'}
 GPU_PARTITIONS    = {'gpu', 'gpumedium'}
 DEFAULT_CONTAINER = 'general-compute'
 
-GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '')
-GITHUB_REPO  = os.environ.get('GITHUB_REPO', 'muhamhamza123/puhti-run-poc')
+GITHUB_TOKEN  = os.environ.get('GITHUB_TOKEN', '')
+GITHUB_REPO   = os.environ.get('GITHUB_REPO', 'muhamhamza123/puhti-run-poc')
+JUPYTERHUB_URL = os.environ.get('JUPYTERHUB_URL', 'https://diwa-data-lab-vre.rahtiapp.fi')
+
+
+def _validate_jupyterhub_token(token: str) -> str:
+    """Validate a JupyterHub API token and return the username, or raise 401."""
+    if not token:
+        raise HTTPException(401, 'Missing JupyterHub token')
+    try:
+        url = f'{JUPYTERHUB_URL}/hub/api/user'
+        req = urllib.request.Request(url, headers={'Authorization': f'token {token}'})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+        return data['name']
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(401, f'Invalid or expired JupyterHub token: {e}')
 
 
 # ── Database ──────────────────────────────────────────────────────────────────
@@ -144,10 +161,14 @@ async def run_notebook(
     memory_gb:    int = Form(16),
     container:    str = Form(DEFAULT_CONTAINER),
     username:     str = Form(''),
+    x_jupyterhub_token: Optional[str] = Header(None),
 ):
     """Accept a .ipynb file, convert it to script.py on the head node, then submit."""
     if partition not in VALID_PARTITIONS:
         raise HTTPException(400, f'Unknown partition: {partition}')
+
+    if x_jupyterhub_token:
+        username = _validate_jupyterhub_token(x_jupyterhub_token)
 
     job_id  = str(uuid.uuid4())
     job_dir = os.path.join(NFS_RUNS, job_id)
@@ -184,10 +205,14 @@ async def run_code(
     memory_gb:    int = Form(16),
     container:    str = Form(DEFAULT_CONTAINER),
     username:     str = Form(''),
+    x_jupyterhub_token: Optional[str] = Header(None),
 ):
     if partition not in VALID_PARTITIONS:
         raise HTTPException(400, f'Unknown partition: {partition}. '
                                  f'Choose from {sorted(VALID_PARTITIONS)}')
+
+    if x_jupyterhub_token:
+        username = _validate_jupyterhub_token(x_jupyterhub_token)
 
     job_id  = str(uuid.uuid4())
     job_dir = os.path.join(NFS_RUNS, job_id)
