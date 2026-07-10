@@ -1,6 +1,6 @@
 Production TODO — Puhti Admin & API
 =====================================
-Last updated: 2026-07-09
+Last updated: 2026-07-10
 
 
 🔴 CRITICAL — ALL FIXED 2026-07-09
@@ -95,3 +95,20 @@ Last updated: 2026-07-09
 
 17. [DONE] Dead code in repo root
     run_button_widget.py and demo_user_script.py deleted (git rm).
+
+
+🔵 PRODUCTION HARDENING — ALL DONE 2026-07-10
+-----------------------------------------------
+
+18. [DONE] Session cookie missing secure flag
+    admin.py set_cookie() now includes secure=True so browser never sends
+    the cookie over plain HTTP.
+
+19. [DONE] CORS open to all origins
+    main.py was using allow_origins=['*']. Now locked to:
+    https://hbv.we3data.com and https://diwa-data-lab-vre.rahtiapp.fi
+    Configurable via CORS_ALLOWED_ORIGINS env var in service file.
+
+20. [DONE] Cleanup cron confirmed installed
+    sudo crontab -u hbv -l confirmed: 0 2 * * * runs cleanup.sh daily at 2am.
+    Log at /var/log/puhti-cleanup.log.
