@@ -551,16 +551,24 @@ def _store_container_request(username: str, container: str, pr_url: str, pr_numb
 def _generate_def(name: str, packages: list[str]) -> bytes:
     pkg_lines = ' \\\n        '.join(packages)
     template = f"""Bootstrap: docker
-From: python:3.11-slim
+From: nvidia/cuda:12.2.0-runtime-ubuntu22.04
 
 %post
     export TMPDIR=/scratch/project_2014823/tmp
     export PIP_NO_CACHE_DIR=1
+    export DEBIAN_FRONTEND=noninteractive
     mkdir -p $TMPDIR
 
     apt-get update -q && apt-get install -y --no-install-recommends \\
+        python3.11 python3.11-dev python3-pip \\
         gcc g++ git curl libgeos-dev \\
         && rm -rf /var/lib/apt/lists/*
+
+    ln -sf /usr/bin/python3.11 /usr/local/bin/python
+    ln -sf /usr/bin/python3.11 /usr/local/bin/python3
+    ln -sf /usr/bin/pip3 /usr/local/bin/pip
+
+    pip install --no-cache-dir --upgrade pip
 
     pip install --no-cache-dir \\
         numpy \\
@@ -585,6 +593,7 @@ From: python:3.11-slim
 
 %help
     Custom container: {name}
+    Base: nvidia/cuda:12.2.0-runtime-ubuntu22.04
     Extra packages: {', '.join(packages)}
 """
     return template.encode()
