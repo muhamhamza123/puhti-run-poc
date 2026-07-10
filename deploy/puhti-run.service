@@ -18,6 +18,7 @@ Environment="SLURM_SH=/scratch/project_2014823/generic_run.sh"
 Environment="GITHUB_REPO=muhamhamza123/puhti-run-poc"
 Environment="ADMIN_ALLOWED_USERS=muhamhamza123,LizCarter492"
 Environment="API_LOG_FILE=/var/log/puhti-run/api.log"
+Environment="CORS_ALLOWED_ORIGINS=https://hbv.we3data.com,https://diwa-data-lab-vre.rahtiapp.fi"
 # Secrets (GITHUB_TOKEN, ADMIN_SESSION_SECRET, SMTP_PASSWORD) must be set
 # in /etc/systemd/system/puhti-run.service.d/override.conf — never commit them here
 

@@ -139,7 +139,7 @@ def callback(code: str = ''):
 
     session = _make_session(username)
     resp = RedirectResponse(f'{PUBLIC_URL}/admin')
-    resp.set_cookie('admin_session', session, httponly=True, samesite='lax', max_age=86400*7)
+    resp.set_cookie('admin_session', session, httponly=True, samesite='lax', secure=True, max_age=86400*7)
     return resp
 
 
