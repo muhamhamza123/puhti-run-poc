@@ -1,0 +1,47 @@
+Bootstrap: docker
+From: nvidia/cuda:12.2.0-runtime-ubuntu22.04
+
+%post
+    export TMPDIR=/scratch/project_2014823/tmp
+    export PIP_NO_CACHE_DIR=1
+    export DEBIAN_FRONTEND=noninteractive
+    mkdir -p $TMPDIR
+
+    apt-get update -q && apt-get install -y --no-install-recommends \
+        python3.11 python3.11-dev python3-pip \
+        gcc g++ git curl libgeos-dev \
+        && rm -rf /var/lib/apt/lists/*
+
+    ln -sf /usr/bin/python3.11 /usr/local/bin/python
+    ln -sf /usr/bin/python3.11 /usr/local/bin/python3
+    ln -sf /usr/bin/pip3 /usr/local/bin/pip
+
+    pip install --no-cache-dir --upgrade pip
+
+    pip install --no-cache-dir \
+        numpy \
+        pandas \
+        matplotlib \
+        seaborn \
+        requests \
+        tqdm \
+        ipykernel \
+        nbformat \
+        torch \
+        torchvision \
+        matplotlib
+
+    mkdir -p /app /output
+
+%environment
+    export PYTHONUNBUFFERED=1
+    export MPLBACKEND=Agg
+
+%labels
+    Name pytorch-cifar3
+    Version 1.0
+
+%help
+    Custom container: pytorch-cifar3
+    Base: nvidia/cuda:12.2.0-runtime-ubuntu22.04
+    Extra packages: torch, torchvision, matplotlib
