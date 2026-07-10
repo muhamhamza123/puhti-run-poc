@@ -549,7 +549,7 @@ def _store_container_request(username: str, container: str, pr_url: str, pr_numb
 
 
 def _generate_def(name: str, packages: list[str]) -> bytes:
-    pkg_lines = '\n        '.join(packages)
+    pkg_lines = ' \\\n        '.join(packages)
     template = f"""Bootstrap: docker
 From: python:3.11-slim
 
