@@ -551,7 +551,7 @@ def _store_container_request(username: str, container: str, pr_url: str, pr_numb
 def _generate_def(name: str, packages: list[str]) -> bytes:
     pkg_lines = ' \\\n        '.join(packages)
     template = f"""Bootstrap: docker
-From: nvidia/cuda:12.2.0-base-ubuntu22.04
+From: python:3.10-slim
 
 %post
     export TMPDIR=/scratch/project_2014823/tmp
@@ -560,20 +560,16 @@ From: nvidia/cuda:12.2.0-base-ubuntu22.04
     mkdir -p $TMPDIR
 
     apt-get update -q && apt-get install -y --no-install-recommends \\
-        python3 python3-dev python3-pip \\
         gcc g++ git curl libgeos-dev \\
         && rm -rf /var/lib/apt/lists/*
 
-    ln -sf /usr/bin/python3 /usr/local/bin/python
-    python3 -m pip install --no-cache-dir --upgrade pip
-
-    # Separate pass for torch/torchvision: use cu121 whl index so the wheels
-    # are built for CUDA 12.x and compatible with the Puhti driver (12.2).
-    python3 -m pip install --no-cache-dir \\
+    # cu121 wheels work with CUDA driver 12.x present on host (injected via --nv).
+    # python:3.10-slim already has pip; no CUDA base image needed.
+    pip install --no-cache-dir \\
         --extra-index-url https://download.pytorch.org/whl/cu121 \\
         {pkg_lines}
 
-    python3 -m pip install --no-cache-dir \\
+    pip install --no-cache-dir \\
         numpy \\
         pandas \\
         matplotlib \\
@@ -595,7 +591,7 @@ From: nvidia/cuda:12.2.0-base-ubuntu22.04
 
 %help
     Custom container: {name}
-    Base: nvidia/cuda:12.2.0-runtime-ubuntu22.04
+    Base: python:3.10-slim (CUDA injected at runtime via --nv)
     Extra packages: {', '.join(packages)}
 """
     return template.encode()
