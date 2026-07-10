@@ -44,7 +44,7 @@ jobs:
     needs: detect
     if: ${{ needs.detect.outputs.matrix != '{"name":[]}' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 180
     strategy:
       matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
       fail-fast: false
@@ -74,9 +74,9 @@ jobs:
             "sbatch \
               --account=project_2014823 \
               --partition=small \
-              --cpus-per-task=4 \
-              --mem=16G \
-              --time=01:00:00 \
+              --cpus-per-task=8 \
+              --mem=32G \
+              --time=02:00:00 \
               --output=/scratch/project_2014823/runs/build-${NAME}-%j.out \
               --wrap=\"
                 export MODULEPATH=/appl/modulefiles:\\\$MODULEPATH
@@ -99,7 +99,7 @@ jobs:
         run: |
           JOB_ID=${{ steps.submit.outputs.job_id }}
           echo "Polling job $JOB_ID..."
-          for i in $(seq 1 60); do
+          for i in $(seq 1 120); do
             sleep 60
             STATE=$(ssh -i ~/.ssh/id_puhti ${{ secrets.PUHTI_USER }}@puhti.csc.fi \
               "squeue -j $JOB_ID -h --format=%T 2>/dev/null || echo DONE")

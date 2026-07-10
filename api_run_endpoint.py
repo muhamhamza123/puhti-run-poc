@@ -551,7 +551,7 @@ def _store_container_request(username: str, container: str, pr_url: str, pr_numb
 def _generate_def(name: str, packages: list[str]) -> bytes:
     pkg_lines = ' \\\n        '.join(packages)
     template = f"""Bootstrap: docker
-From: nvidia/cuda:12.2.0-runtime-ubuntu22.04
+From: nvidia/cuda:12.2.0-base-ubuntu22.04
 
 %post
     export TMPDIR=/scratch/project_2014823/tmp
