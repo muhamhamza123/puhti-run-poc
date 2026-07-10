@@ -560,17 +560,20 @@ From: nvidia/cuda:12.2.0-base-ubuntu22.04
     mkdir -p $TMPDIR
 
     apt-get update -q && apt-get install -y --no-install-recommends \\
-        python3.11 python3.11-dev python3-pip \\
+        python3 python3-dev python3-pip \\
         gcc g++ git curl libgeos-dev \\
         && rm -rf /var/lib/apt/lists/*
 
-    ln -sf /usr/bin/python3.11 /usr/local/bin/python
-    ln -sf /usr/bin/python3.11 /usr/local/bin/python3
-    ln -sf /usr/bin/pip3 /usr/local/bin/pip
+    ln -sf /usr/bin/python3 /usr/local/bin/python
+    python3 -m pip install --no-cache-dir --upgrade pip
 
-    pip install --no-cache-dir --upgrade pip
+    # Separate pass for torch/torchvision: use cu121 whl index so the wheels
+    # are built for CUDA 12.x and compatible with the Puhti driver (12.2).
+    python3 -m pip install --no-cache-dir \\
+        --extra-index-url https://download.pytorch.org/whl/cu121 \\
+        {pkg_lines}
 
-    pip install --no-cache-dir \\
+    python3 -m pip install --no-cache-dir \\
         numpy \\
         pandas \\
         matplotlib \\
@@ -578,8 +581,7 @@ From: nvidia/cuda:12.2.0-base-ubuntu22.04
         requests \\
         tqdm \\
         ipykernel \\
-        nbformat \\
-        {pkg_lines}
+        nbformat
 
     mkdir -p /app /output
 
