@@ -35,7 +35,7 @@ if [ -f "${JOB_DIR}/requirements.txt" ]; then
         --env TMPDIR="${SHARED_TMP}" \
         --env PIP_CACHE_DIR="${SHARED_CACHE}" \
         "${SIF}" \
-        pip install --quiet \
+        /opt/venv/bin/pip install --quiet \
             -r "${JOB_DIR}/requirements.txt" \
             --target "${JOB_DIR}/.packages"
 fi
@@ -45,7 +45,7 @@ echo "[run] container python test..."
 apptainer exec --no-home --bind /scratch:/scratch \
     $( [ "${USE_GPU:-0}" = "1" ] && echo "--nv" ) \
     "${SIF}" \
-    python -c "import sys, os; print('python:', sys.executable); print('path:', sys.path[:3]); import torch; print('torch:', torch.__version__)" \
+    /opt/venv/bin/python -c "import sys, os; print('python:', sys.executable); print('path:', sys.path[:3]); import torch; print('torch:', torch.__version__)" \
     2>&1 || echo "[run] container python test FAILED exit=$?"
 
 echo "[run] running script.py..."
@@ -64,7 +64,7 @@ apptainer exec \
     --env XDG_CACHE_HOME="${JOB_DIR}/.cache" \
     --env XDG_CONFIG_HOME="${JOB_DIR}/.config" \
     "${SIF}" \
-    bash -c "export HOME=${JOB_DIR}; python ${JOB_DIR}/script.py"
+    bash -c "export HOME=${JOB_DIR}; /opt/venv/bin/python ${JOB_DIR}/script.py"
 
 EXIT_CODE=$?
 echo "[run] finished exit=${EXIT_CODE} at $(date)"

@@ -551,7 +551,7 @@ def _store_container_request(username: str, container: str, pr_url: str, pr_numb
 def _generate_def(name: str, packages: list[str]) -> bytes:
     pkg_lines = ' \\\n        '.join(packages)
     template = f"""Bootstrap: docker
-From: python:3.10-slim
+From: ubuntu:22.04
 
 %post
     export TMPDIR=/scratch/project_2014823/tmp
@@ -560,16 +560,22 @@ From: python:3.10-slim
     mkdir -p $TMPDIR
 
     apt-get update -q && apt-get install -y --no-install-recommends \\
+        python3 python3-dev python3-pip python3-venv \\
         gcc g++ git curl libgeos-dev \\
         && rm -rf /var/lib/apt/lists/*
 
-    # cu121 wheels work with CUDA driver 12.x present on host (injected via --nv).
-    # python:3.10-slim already has pip; no CUDA base image needed.
-    pip install --no-cache-dir \\
-        --extra-index-url https://download.pytorch.org/whl/cu121 \\
-        {pkg_lines}
+    # Install into /opt/venv so Puhti's apptainer bind of /usr/local does not
+    # overwrite our packages. Use explicit /opt/venv/bin/pip everywhere.
+    python3 -m venv /opt/venv
+    /opt/venv/bin/pip install --no-cache-dir --upgrade pip
 
-    pip install --no-cache-dir \\
+    # torch/torchvision: use cu121 index-url (not extra) to force CUDA 12.x
+    # wheels — compatible with Puhti CUDA driver 12.2.
+    /opt/venv/bin/pip install --no-cache-dir \\
+        --index-url https://download.pytorch.org/whl/cu121 \\
+        torch torchvision
+
+    /opt/venv/bin/pip install --no-cache-dir \\
         numpy \\
         pandas \\
         matplotlib \\
@@ -577,11 +583,14 @@ From: python:3.10-slim
         requests \\
         tqdm \\
         ipykernel \\
-        nbformat
+        nbformat \\
+        {pkg_lines}
 
     mkdir -p /app /output
 
 %environment
+    export PATH=/opt/venv/bin:$PATH
+    export VIRTUAL_ENV=/opt/venv
     export PYTHONUNBUFFERED=1
     export MPLBACKEND=Agg
 
@@ -591,7 +600,7 @@ From: python:3.10-slim
 
 %help
     Custom container: {name}
-    Base: python:3.10-slim (CUDA injected at runtime via --nv)
+    Base: ubuntu:22.04, venv at /opt/venv (avoids Puhti /usr/local bind)
     Extra packages: {', '.join(packages)}
 """
     return template.encode()
