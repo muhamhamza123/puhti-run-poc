@@ -1,0 +1,12 @@
+name: fullstack-test
+requested_by: muhamhamza123
+approved_at: 2026-07-15 12:16 UTC
+slurm_build_job: 35461320
+packages:
+  - torch
+  - torchvision
+  - scikit-learn
+  - pandas
+  - scipy
+  - xgboost
+  - Pillow
