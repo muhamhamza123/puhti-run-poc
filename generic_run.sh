@@ -40,6 +40,14 @@ if [ -f "${JOB_DIR}/requirements.txt" ]; then
             --target "${JOB_DIR}/.packages"
 fi
 
+echo "[run] SIF size: $(ls -lh ${SIF} 2>/dev/null | awk '{print $5}' || echo NOT_FOUND)"
+echo "[run] container python test..."
+apptainer exec --no-home --bind /scratch:/scratch \
+    $( [ "${USE_GPU:-0}" = "1" ] && echo "--nv" ) \
+    "${SIF}" \
+    python -c "import sys, os; print('python:', sys.executable); print('path:', sys.path[:3]); import torch; print('torch:', torch.__version__)" \
+    2>&1 || echo "[run] container python test FAILED exit=$?"
+
 echo "[run] running script.py..."
 cd "${JOB_DIR}"
 mkdir -p "${JOB_DIR}/.seaborn-data" "${JOB_DIR}/.cache" "${JOB_DIR}/.config"
