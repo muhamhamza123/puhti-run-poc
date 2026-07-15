@@ -227,12 +227,52 @@ def _build_venv_script(name: str, packages: list[str]) -> str:
 #SBATCH --output={PUHTI_ENVS}/build-{name}-%j.out
 
 export MODULEPATH=/appl/modulefiles:$MODULEPATH
-module load python-data 2>/dev/null || true
 
+# Find a Python >= 3.8 — try modules first, then known fixed paths
+PYTHON3=""
+for attempt in \
+    "module load python-data && python3" \
+    "module load python/3.11 && python3" \
+    "module load python/3.10 && python3" \
+    "/appl/soft/ai/tykky/python-data-2024-01/bin/python3" \
+    "/appl/soft/ai/tykky/python-data-2023-08/bin/python3" \
+    "/usr/bin/python3.11" \
+    "/usr/bin/python3.10" \
+    "/usr/bin/python3.9" \
+    "/usr/bin/python3.8"; do
+    if eval "$attempt --version" &>/dev/null 2>&1; then
+        VER=$(eval "$attempt --version 2>&1" | awk '{{print $2}}')
+        MAJOR=$(echo $VER | cut -d. -f1)
+        MINOR=$(echo $VER | cut -d. -f2)
+        if [ "$MAJOR" -ge 3 ] && [ "$MINOR" -ge 8 ]; then
+            PYTHON3="$(eval "which $attempt" 2>/dev/null || echo "$attempt")"
+            echo "[build] using Python $VER from: $attempt"
+            break
+        fi
+    fi
+done
+
+# Simpler fallback: eval each attempt and grab the working one
+if [ -z "$PYTHON3" ]; then
+    for mod in python-data "python/3.11" "python/3.10"; do
+        if module load $mod 2>/dev/null && python3 -c "import sys; exit(0 if sys.version_info>=(3,8) else 1)" 2>/dev/null; then
+            PYTHON3=$(which python3)
+            echo "[build] loaded module $mod → $PYTHON3 $(python3 --version)"
+            break
+        fi
+    done
+fi
+
+if [ -z "$PYTHON3" ]; then
+    echo "[build] ERROR: no Python >= 3.8 found"
+    exit 1
+fi
+
+echo "[build] Python: $($PYTHON3 --version)"
 mkdir -p {PUHTI_ENVS}
 VENV={PUHTI_ENVS}/{name}
 rm -rf "$VENV"
-python3 -m venv "$VENV"
+"$PYTHON3" -m venv "$VENV"
 "$VENV/bin/pip" install --no-cache-dir --upgrade pip
 
 {torch_line}{other_line}

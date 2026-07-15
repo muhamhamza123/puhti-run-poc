@@ -440,6 +440,21 @@ def admin_container_requests(admin_session: str | None = Cookie(default=None)):
     return {'requests': [dict(r) for r in rows]}
 
 
+@router.get('/container-log/{req_id}')
+def container_build_log(req_id: int, admin_session: str | None = Cookie(default=None)):
+    _require_auth(admin_session)
+    with contextlib.closing(_db()) as db:
+        row = db.execute(
+            'SELECT container, build_job_id FROM container_requests WHERE id=?', (req_id,)
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, 'Request not found')
+    from api_run_endpoint import _ssh, PUHTI_ENVS
+    log_path = f'{PUHTI_ENVS}/build-{row["container"]}-{row["build_job_id"]}.out'
+    r = _ssh(f'cat {log_path} 2>/dev/null || echo "(log not yet available)"', timeout=15)
+    return {'log': r.stdout or '(empty)'}
+
+
 @router.post('/approve-container/{req_id}')
 def approve_container(req_id: int, admin_session: str | None = Cookie(default=None)):
     _require_auth(admin_session)
@@ -1692,10 +1707,10 @@ async function loadContainerRequests(){
     <td>${B(r.status)}</td>
     <td style="color:var(--text2);font-size:11px">${r.build_job_id||'—'}</td>
     <td style="color:var(--text2)">${fmt(r.created)}</td>
-    <td>${r.status==='pending'?`
+    <td style="white-space:nowrap">${r.status==='pending'?`
       <button class="act-btn" style="background:var(--green)" onclick="approveEnv(${r.id})">Approve</button>
       <button class="act-btn" style="background:var(--red);margin-left:4px" onclick="rejectEnv(${r.id})">Reject</button>
-    `:r.status==='building'?'<span style="color:var(--orange);font-size:11px">building…</span>':''}</td>
+    `:''} ${r.build_job_id?`<button class="act-btn" style="background:var(--blue)" onclick="viewBuildLog(${r.id})">View Log</button>`:''}</td>
   </tr>`).join()||'<tr><td colspan="7" style="color:var(--text2);padding:12px">No requests</td></tr>';
 }
 
@@ -1712,6 +1727,28 @@ async function rejectEnv(id){
   const r=await fetch(BASE+'/admin/reject-container/'+id,{method:'POST',credentials:'include'});
   if(r.ok)loadContainerRequests();
   else alert('Error rejecting request');
+}
+
+async function viewBuildLog(id){
+  let modal=document.getElementById('build-log-modal');
+  if(!modal){
+    modal=document.createElement('div');
+    modal.id='build-log-modal';
+    modal.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center';
+    modal.innerHTML=`<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;width:min(860px,95vw);max-height:80vh;display:flex;flex-direction:column;padding:16px;gap:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <strong>Build Log</strong>
+        <button onclick="document.getElementById('build-log-modal').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text)">✕</button>
+      </div>
+      <pre id="build-log-content" style="flex:1;overflow:auto;background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:12px;font-size:11px;white-space:pre-wrap;margin:0">Loading…</pre>
+      <button class="act-btn" style="background:var(--blue);align-self:flex-end" onclick="viewBuildLog(${id})">Refresh</button>
+    </div>`;
+    modal.addEventListener('click',e=>{if(e.target===modal)modal.remove();});
+    document.body.appendChild(modal);
+  }
+  document.getElementById('build-log-content').textContent='Loading…';
+  const data=await api('/admin/container-log/'+id);
+  document.getElementById('build-log-content').textContent=data?.log||'(no log)';
 }
 
 function refreshAll(){
