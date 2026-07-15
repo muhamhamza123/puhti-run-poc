@@ -284,6 +284,50 @@ echo "VENV_BUILD_SUCCESS"
 """
 
 
+def _commit_env_record(name: str, packages: list[str], username: str, slurm_job_id: str) -> None:
+    """Commit a record file to GitHub so env requests are tracked in the repo."""
+    if not GITHUB_TOKEN:
+        return
+    from datetime import datetime, timezone
+    content = (
+        f"name: {name}\n"
+        f"requested_by: {username}\n"
+        f"approved_at: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
+        f"slurm_build_job: {slurm_job_id}\n"
+        f"packages:\n" + ''.join(f"  - {p}\n" for p in packages)
+    )
+    headers = {
+        'Authorization': f'token {GITHUB_TOKEN}',
+        'Accept': 'application/vnd.github+json',
+        'Content-Type': 'application/json',
+    }
+    path = f'envs/{name}.txt'
+    url = f'https://api.github.com/repos/{GITHUB_REPO}/contents/{path}'
+    try:
+        # Check if file already exists (need its sha to update)
+        req = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(req) as resp:
+                existing = json.loads(resp.read())
+            sha = existing.get('sha')
+        except urllib.error.HTTPError:
+            sha = None
+
+        body: dict = {
+            'message': f'Track env: {name} (approved for {username})',
+            'content': base64.b64encode(content.encode()).decode(),
+        }
+        if sha:
+            body['sha'] = sha
+
+        req = urllib.request.Request(url, data=json.dumps(body).encode(), headers=headers, method='PUT')
+        with urllib.request.urlopen(req) as resp:
+            resp.read()
+        _log.info('env_record_committed name=%s', name)
+    except Exception as e:
+        _log.warning('env_record_commit_failed name=%s err=%s', name, e)
+
+
 def _submit_venv_build(name: str, packages: list[str]) -> str:
     """Write build script to Puhti and sbatch it. Returns Slurm job ID."""
     script = _build_venv_script(name, packages)

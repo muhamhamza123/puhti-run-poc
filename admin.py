@@ -460,11 +460,11 @@ def approve_container(req_id: int, admin_session: str | None = Cookie(default=No
     _require_auth(admin_session)
     with contextlib.closing(_db()) as db:
         row = db.execute(
-            'SELECT container, packages FROM container_requests WHERE id=?', (req_id,)
+            'SELECT container, packages, username FROM container_requests WHERE id=?', (req_id,)
         ).fetchone()
     if not row:
         raise HTTPException(404, 'Request not found')
-    from api_run_endpoint import _submit_venv_build
+    from api_run_endpoint import _submit_venv_build, _commit_env_record
     pkg_list = [p.strip() for p in (row['packages'] or '').split() if p.strip()]
     job_id = _submit_venv_build(row['container'], pkg_list)
     with contextlib.closing(_db()) as db:
@@ -473,6 +473,7 @@ def approve_container(req_id: int, admin_session: str | None = Cookie(default=No
             (job_id, req_id)
         )
         db.commit()
+    _commit_env_record(row['container'], pkg_list, row.get('username', ''), job_id)
     return {'status': 'building', 'slurm_job_id': job_id}
 
 
