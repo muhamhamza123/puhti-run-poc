@@ -473,7 +473,7 @@ def approve_container(req_id: int, admin_session: str | None = Cookie(default=No
             (job_id, req_id)
         )
         db.commit()
-    _commit_env_record(row['container'], pkg_list, row.get('username', ''), job_id)
+    _commit_env_record(row['container'], pkg_list, row['username'] or '', job_id)
     return {'status': 'building', 'slurm_job_id': job_id}
 
 
