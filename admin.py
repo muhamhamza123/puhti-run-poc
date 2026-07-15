@@ -1701,7 +1701,7 @@ async function loadContainerRequests(){
 
 async function approveEnv(id){
   if(!confirm('Approve and start building this environment?'))return;
-  const r=await fetch('/admin/approve-container/'+id,{method:'POST'});
+  const r=await fetch(BASE+'/admin/approve-container/'+id,{method:'POST',credentials:'include'});
   const d=await r.json();
   if(r.ok){alert('Build submitted — Slurm job '+d.slurm_job_id);loadContainerRequests();}
   else alert('Error: '+JSON.stringify(d));
@@ -1709,7 +1709,7 @@ async function approveEnv(id){
 
 async function rejectEnv(id){
   if(!confirm('Reject this request?'))return;
-  const r=await fetch('/admin/reject-container/'+id,{method:'POST'});
+  const r=await fetch(BASE+'/admin/reject-container/'+id,{method:'POST',credentials:'include'});
   if(r.ok)loadContainerRequests();
   else alert('Error rejecting request');
 }
