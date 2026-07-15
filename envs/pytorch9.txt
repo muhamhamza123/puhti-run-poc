@@ -1,0 +1,8 @@
+name: pytorch9
+requested_by: muhamhamza123
+approved_at: 2026-07-15 11:02 UTC
+slurm_build_job: 35459903
+packages:
+  - torch
+  - torchvision
+  - matplotlib
