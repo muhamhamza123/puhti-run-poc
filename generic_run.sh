@@ -18,6 +18,11 @@ mkdir -p "${JOB_DIR}/.mplconfig"
 exec > "${JOB_DIR}/stdout.txt" 2> "${JOB_DIR}/stderr.txt"
 
 echo "[run] slurm_job=${SLURM_JOB_ID} host=$(hostname) started=$(date)"
+echo "[run] SIF_PATH=${SIF_PATH}"
+echo "[run] SIF=${SIF}"
+echo "[run] USE_GPU=${USE_GPU}"
+echo "[run] JOB_DIR=${JOB_DIR}"
+echo "[run] apptainer=$(which apptainer 2>/dev/null || echo NOT_FOUND)"
 
 # Install user dependencies into job-local dir on scratch (avoids home dir space limits)
 if [ -f "${JOB_DIR}/requirements.txt" ]; then
