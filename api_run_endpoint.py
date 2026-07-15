@@ -270,10 +270,14 @@ fi
 
 echo "[build] Python: $($PYTHON3 --version)"
 mkdir -p {PUHTI_ENVS}
+export TMPDIR=/scratch/project_2014823/tmp
+export PIP_CACHE_DIR=/scratch/project_2014823/pip-cache
+mkdir -p "$TMPDIR" "$PIP_CACHE_DIR"
+
 VENV={PUHTI_ENVS}/{name}
 rm -rf "$VENV"
 "$PYTHON3" -m venv "$VENV"
-"$VENV/bin/pip" install --no-cache-dir --upgrade pip
+"$VENV/bin/pip" install --upgrade pip
 
 {torch_line}{other_line}
 echo "VENV_BUILD_SUCCESS"
