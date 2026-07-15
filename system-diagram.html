@@ -1,0 +1,705 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Puhti Run — System Architecture</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root {
+    --bg:      #08091a;
+    --bg2:     #0d1028;
+    --bg3:     #111430;
+    --border:  #1e2650;
+    --text:    #e2e8f0;
+    --text2:   #7886a8;
+    --text3:   #4a5578;
+
+    --user:    #3b82f6;
+    --user-bg: #0d1e3d;
+    --user-bd: #1e3a6e;
+
+    --api:     #14b8a6;
+    --api-bg:  #051e1c;
+    --api-bd:  #0d3b38;
+
+    --puhti:   #f59e0b;
+    --puhti-bg:#1e1200;
+    --puhti-bd:#3d2800;
+
+    --ext:     #a78bfa;
+    --ext-bg:  #130d2a;
+    --ext-bd:  #2e1f5e;
+
+    --admin:   #34d399;
+    --admin-bg:#051a10;
+    --admin-bd:#0d3d26;
+
+    --ok:      #22c55e;
+    --warn:    #f97316;
+    --err:     #ef4444;
+
+    --arrow:   #2a3a6a;
+    --radius:  8px;
+    --mono: 'SF Mono','Fira Code','Consolas',monospace;
+    --sans: -apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    padding: 32px 24px 64px;
+  }
+
+  .page-header {
+    text-align: center;
+    margin-bottom: 48px;
+  }
+  .page-header h1 {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    color: var(--text);
+  }
+  .page-header p {
+    margin-top: 8px;
+    font-size: 13px;
+    color: var(--text2);
+    font-family: var(--mono);
+  }
+
+  /* Legend */
+  .legend {
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-bottom: 40px;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    color: var(--text2);
+    font-family: var(--mono);
+  }
+  .legend-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  /* Section wrapper */
+  .flow-section {
+    position: relative;
+    margin-bottom: 60px;
+  }
+  .flow-section-title {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--text3);
+    font-family: var(--mono);
+    margin-bottom: 16px;
+    padding-left: 2px;
+  }
+
+  /* SVG arrow overlay */
+  .flow-section svg.arrows {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    overflow: visible;
+  }
+
+  /* Swimlane grid */
+  .swimlanes {
+    display: grid;
+    gap: 16px;
+    position: relative;
+  }
+  .swimlanes.cols-4 { grid-template-columns: repeat(4, 1fr); }
+  .swimlanes.cols-5 { grid-template-columns: repeat(5, 1fr); }
+
+  /* Column */
+  .lane {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  /* Column header */
+  .lane-header {
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    font-family: var(--mono);
+    text-align: center;
+    border: 1px solid;
+  }
+  .lane-header.user  { color: var(--user);  background: var(--user-bg);  border-color: var(--user-bd);  }
+  .lane-header.api   { color: var(--api);   background: var(--api-bg);   border-color: var(--api-bd);   }
+  .lane-header.puhti { color: var(--puhti); background: var(--puhti-bg); border-color: var(--puhti-bd); }
+  .lane-header.ext   { color: var(--ext);   background: var(--ext-bg);   border-color: var(--ext-bd);   }
+  .lane-header.admin { color: var(--admin); background: var(--admin-bg); border-color: var(--admin-bd); }
+
+  /* Step box */
+  .step {
+    border-radius: var(--radius);
+    border: 1px solid;
+    padding: 12px 14px;
+    position: relative;
+  }
+  .step.user  { background: var(--user-bg);  border-color: var(--user-bd);  }
+  .step.api   { background: var(--api-bg);   border-color: var(--api-bd);   }
+  .step.puhti { background: var(--puhti-bg); border-color: var(--puhti-bd); }
+  .step.ext   { background: var(--ext-bg);   border-color: var(--ext-bd);   }
+  .step.admin { background: var(--admin-bg); border-color: var(--admin-bd); }
+  .step.empty { background: transparent; border-color: transparent; }
+
+  .step-num {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .06em;
+    margin-bottom: 6px;
+    opacity: .5;
+  }
+  .step.user  .step-num { color: var(--user);  }
+  .step.api   .step-num { color: var(--api);   }
+  .step.puhti .step-num { color: var(--puhti); }
+  .step.ext   .step-num { color: var(--ext);   }
+  .step.admin .step-num { color: var(--admin); }
+
+  .step-title {
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.3;
+    margin-bottom: 5px;
+  }
+  .step.user  .step-title { color: var(--user);  }
+  .step.api   .step-title { color: var(--api);   }
+  .step.puhti .step-title { color: var(--puhti); }
+  .step.ext   .step-title { color: var(--ext);   }
+  .step.admin .step-title { color: var(--admin); }
+
+  .step-desc {
+    font-size: 11.5px;
+    color: var(--text2);
+    line-height: 1.5;
+  }
+
+  .step-code {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--text2);
+    background: rgba(0,0,0,.35);
+    border-radius: 4px;
+    padding: 6px 8px;
+    margin-top: 7px;
+    line-height: 1.6;
+    white-space: pre;
+    overflow-x: auto;
+  }
+
+  /* Check badges */
+  .checks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 7px;
+  }
+  .check {
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    font-weight: 600;
+  }
+  .check.ok   { background: rgba(34,197,94,.12); color: var(--ok);   border: 1px solid rgba(34,197,94,.25); }
+  .check.warn { background: rgba(249,115,22,.12); color: var(--warn); border: 1px solid rgba(249,115,22,.25); }
+  .check.err  { background: rgba(239,68,68,.12);  color: var(--err);  border: 1px solid rgba(239,68,68,.25); }
+  .check.info { background: rgba(148,163,184,.08); color: var(--text2); border: 1px solid var(--border); }
+
+  /* Spacer to align rows across lanes */
+  .step-spacer { flex: 1; }
+
+  /* Divider between flows */
+  .section-divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 48px 0;
+  }
+
+  /* Infrastructure bar */
+  .infra-bar {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 40px;
+    padding: 16px 20px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+  .infra-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .infra-icon {
+    width: 32px; height: 32px;
+    border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px;
+    flex-shrink: 0;
+  }
+  .infra-label { font-size: 11px; font-weight: 700; margin-bottom: 2px; font-family: var(--mono); }
+  .infra-sub   { font-size: 10.5px; color: var(--text2); }
+  .infra-sep { width: 1px; background: var(--border); align-self: stretch; margin: 0 4px; }
+</style>
+
+<div class="page-header">
+  <h1>Puhti Run — System Architecture & Flow Diagram</h1>
+  <p>FastAPI · Head Node · Puhti HPC · SQLite · GitHub</p>
+</div>
+
+<!-- Legend -->
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:var(--user)"></div>User / Extension</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--api)"></div>FastAPI · Head Node</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--puhti)"></div>Puhti · Slurm</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--ext)"></div>External Services</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--admin)"></div>Admin Panel</div>
+</div>
+
+<!-- Infrastructure -->
+<div class="infra-bar">
+  <div class="infra-item">
+    <div class="infra-icon" style="background:var(--user-bg);border:1px solid var(--user-bd)">🌐</div>
+    <div><div class="infra-label" style="color:var(--user)">JupyterHub</div><div class="infra-sub">diwa-data-lab-vre.rahtiapp.fi</div></div>
+  </div>
+  <div class="infra-sep"></div>
+  <div class="infra-item">
+    <div class="infra-icon" style="background:var(--api-bg);border:1px solid var(--api-bd)">⚡</div>
+    <div><div class="infra-label" style="color:var(--api)">FastAPI · :8002</div><div class="infra-sub">hbv.we3data.com/puhti/ · 4 uvicorn workers</div></div>
+  </div>
+  <div class="infra-sep"></div>
+  <div class="infra-item">
+    <div class="infra-icon" style="background:var(--bg3);border:1px solid var(--border)">🔐</div>
+    <div><div class="infra-label" style="color:var(--text)">SSH ControlMaster</div><div class="infra-sub">ControlPersist=300s · /tmp/ssh-puhti-*</div></div>
+  </div>
+  <div class="infra-sep"></div>
+  <div class="infra-item">
+    <div class="infra-icon" style="background:var(--puhti-bg);border:1px solid var(--puhti-bd)">🖥</div>
+    <div><div class="infra-label" style="color:var(--puhti)">Puhti HPC</div><div class="infra-sub">puhti.csc.fi · /scratch/project_2014823/</div></div>
+  </div>
+  <div class="infra-sep"></div>
+  <div class="infra-item">
+    <div class="infra-icon" style="background:var(--bg3);border:1px solid var(--border)">🗄</div>
+    <div><div class="infra-label" style="color:var(--text)">SQLite WAL</div><div class="infra-sub">/data/hbv/runs/runs.db · busy_timeout=5s</div></div>
+  </div>
+  <div class="infra-sep"></div>
+  <div class="infra-item">
+    <div class="infra-icon" style="background:var(--ext-bg);border:1px solid var(--ext-bd)">📦</div>
+    <div><div class="infra-label" style="color:var(--ext)">GitHub Repo</div><div class="infra-sub">DigitalWaters-fi/puhti-run-poc · envs/*.txt</div></div>
+  </div>
+</div>
+
+<!-- ── FLOW 1: JOB SUBMISSION ── -->
+<div class="flow-section">
+  <div class="flow-section-title">① Job Submission Flow</div>
+  <div class="swimlanes cols-4">
+
+    <!-- USER -->
+    <div class="lane">
+      <div class="lane-header user">User / Extension</div>
+
+      <div class="step user">
+        <div class="step-num">1.1</div>
+        <div class="step-title">Open Extension</div>
+        <div class="step-desc">JupyterLab sidebar loads the Puhti Run panel. Extension calls <code>GET /containers</code> to populate the environment dropdown.</div>
+      </div>
+
+      <div class="step user">
+        <div class="step-num">1.3</div>
+        <div class="step-title">Configure & Submit Job</div>
+        <div class="step-desc">User selects environment, uploads <code>.ipynb</code> notebook and optional <code>requirements.txt</code>, sets partition / CPUs / memory / time.</div>
+        <div class="step-code">POST /run-notebook
+  notebook: .ipynb
+  requirements: optional
+  partition: gpu | small | …
+  container: pytorch3
+  time_hours: 2</div>
+      </div>
+
+      <div class="step user">
+        <div class="step-num">1.8</div>
+        <div class="step-title">Poll Status</div>
+        <div class="step-desc">Extension polls <code>GET /status/{job_id}</code> every 5 s. Shows live status chip: queued → running → done / failed.</div>
+      </div>
+
+      <div class="step user">
+        <div class="step-num">1.10</div>
+        <div class="step-title">View Results</div>
+        <div class="step-desc">Downloads stdout, stderr, output files from <code>GET /results/{job_id}</code>. Inline plots rendered in the extension.</div>
+      </div>
+    </div>
+
+    <!-- API -->
+    <div class="lane">
+      <div class="lane-header api">FastAPI · Head Node</div>
+
+      <div class="step api">
+        <div class="step-num">1.2</div>
+        <div class="step-title">List Environments</div>
+        <div class="step-desc">SSH to Puhti — scans <code>/scratch/…/envs/*/bin/python</code>. Returns list of ready venv names.</div>
+        <div class="checks">
+          <span class="check info">SSH ControlMaster reuse</span>
+          <span class="check ok">cached 60 s</span>
+        </div>
+      </div>
+
+      <div class="step api">
+        <div class="step-num">1.4</div>
+        <div class="step-title">Validate Request</div>
+        <div class="step-desc">Authenticate JupyterHub token via <code>x-jupyterhub-token</code> header. Check per-user quota.</div>
+        <div class="checks">
+          <span class="check ok">token valid</span>
+          <span class="check warn">≤ MAX_CONCURRENT jobs</span>
+          <span class="check err">429 if over quota</span>
+        </div>
+      </div>
+
+      <div class="step api">
+        <div class="step-num">1.5</div>
+        <div class="step-title">Convert & Stage</div>
+        <div class="step-desc">nbconvert <code>.ipynb → script.py</code>, strip IPython magics. Create UUID job dir. rsync all files to Puhti scratch.</div>
+        <div class="step-code">rsync -az job_dir/
+  → /scratch/…/runs/user/UUID/</div>
+      </div>
+
+      <div class="step api">
+        <div class="step-num">1.6</div>
+        <div class="step-title">Submit to Slurm</div>
+        <div class="step-desc">SSH sbatch command with env, resource flags, and job dir.</div>
+        <div class="step-code">sbatch
+  --partition=gpu
+  --gres=gpu:v100:1
+  --export=ALL,
+    VENV_PATH=.../envs/pytorch3,
+    JOB_DIR=.../runs/user/UUID,
+    USE_GPU=1
+  generic_run.sh</div>
+        <div class="checks">
+          <span class="check ok">slurm_id stored in DB</span>
+        </div>
+      </div>
+
+      <div class="step api">
+        <div class="step-num">1.9</div>
+        <div class="step-title">Status Check</div>
+        <div class="step-desc"><code>squeue -j slurm_id</code> → running/done. On done: rsync results from Puhti → NFS. Update DB. Send email if failed (includes stderr tail).</div>
+      </div>
+    </div>
+
+    <!-- PUHTI -->
+    <div class="lane">
+      <div class="lane-header puhti">Puhti · Slurm</div>
+
+      <div class="step empty"></div>
+      <div class="step empty"></div>
+
+      <div class="step puhti">
+        <div class="step-num">1.7</div>
+        <div class="step-title">Compute Node Runs Job</div>
+        <div class="step-desc"><code>generic_run.sh</code> executes on allocated node. Full isolated run inside user's venv.</div>
+        <div class="step-code">module load python-data
+PYTHON=$VENV_PATH/bin/python
+
+# install job requirements
+$PIP install -r requirements.txt
+  --target .packages/
+
+# run
+PYTHONPATH=.packages \
+HOME=$JOB_DIR \
+$PYTHON script.py
+
+# stdout/stderr → files</div>
+        <div class="checks">
+          <span class="check ok">GPU v100 via --nv</span>
+          <span class="check info">each job: own UUID dir</span>
+          <span class="check info">pip installs isolated</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- EXTERNAL -->
+    <div class="lane">
+      <div class="lane-header ext">External Services</div>
+
+      <div class="step empty"></div>
+      <div class="step empty"></div>
+      <div class="step empty"></div>
+      <div class="step empty"></div>
+
+      <div class="step ext">
+        <div class="step-num">1.9b</div>
+        <div class="step-title">Email Notification</div>
+        <div class="step-desc">SMTP (Gmail) sends completion or failure email to user. Failure emails include last 50 lines of stderr.</div>
+        <div class="checks">
+          <span class="check ok">Job done ✓</span>
+          <span class="check err">Job failed ✗ + stderr</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<hr class="section-divider">
+
+<!-- ── FLOW 2: ENV REQUEST & BUILD ── -->
+<div class="flow-section">
+  <div class="flow-section-title">② Environment Request &amp; Build Flow</div>
+  <div class="swimlanes cols-5">
+
+    <!-- USER -->
+    <div class="lane">
+      <div class="lane-header user">User / Extension</div>
+
+      <div class="step user">
+        <div class="step-num">2.1</div>
+        <div class="step-title">Request Environment</div>
+        <div class="step-desc">User fills in a name and package list in the extension's "Request Container" tab.</div>
+        <div class="step-code">POST /request-container-simple
+  name: pytorch3
+  packages:
+    torch
+    torchvision
+    matplotlib
+  username: alice
+  email: alice@uni.fi</div>
+      </div>
+
+      <div class="step user">
+        <div class="step-num">2.3</div>
+        <div class="step-title">Await Approval</div>
+        <div class="step-desc">Extension polls <code>GET /my-container-requests/username</code>. Shows status badge: <strong>pending → building → ready</strong>.</div>
+      </div>
+
+      <div class="step user">
+        <div class="step-num">2.8</div>
+        <div class="step-title">Environment Ready</div>
+        <div class="step-desc">User receives email. New env name appears in the job submission dropdown. Submit jobs using it immediately.</div>
+        <div class="checks">
+          <span class="check ok">visible in dropdown</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- API -->
+    <div class="lane">
+      <div class="lane-header api">FastAPI · Head Node</div>
+
+      <div class="step api">
+        <div class="step-num">2.2</div>
+        <div class="step-title">Store Request</div>
+        <div class="step-desc">Validate name (lowercase + hyphens only), validate package list. Insert into <code>container_requests</code> table.</div>
+        <div class="step-code">INSERT container_requests
+  container=pytorch3
+  packages="torch torchvision …"
+  status=pending
+  username=alice</div>
+        <div class="checks">
+          <span class="check ok">DB write</span>
+          <span class="check err">400 bad name / no packages</span>
+        </div>
+      </div>
+
+      <div class="step api">
+        <div class="step-num">2.5</div>
+        <div class="step-title">Submit Venv Build</div>
+        <div class="step-desc">On admin approval: generate build script, write to Puhti via SSH stdin, sbatch on <code>small</code> partition. Update DB with Slurm job ID.</div>
+        <div class="step-code">_ssh_write(build-pytorch3.sh)
+sbatch build-pytorch3.sh
+→ slurm_job_id=35457153
+UPDATE container_requests
+  SET status=building,
+      build_job_id=35457153</div>
+      </div>
+
+      <div class="step api">
+        <div class="step-num">2.7</div>
+        <div class="step-title">Background Poller</div>
+        <div class="step-desc">Daemon thread runs every <strong>60 s</strong>. Checks all <code>building</code> rows via <code>sacct</code>. On COMPLETED verifies venv python binary exists.</div>
+        <div class="step-code">sacct -j 35457153
+  → State: COMPLETED
+test -f envs/pytorch3/bin/python
+  → OK
+UPDATE status=ready
+→ send email to alice</div>
+        <div class="checks">
+          <span class="check ok">COMPLETED + python ✓ → ready</span>
+          <span class="check err">FAILED/TIMEOUT → failed</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ADMIN -->
+    <div class="lane">
+      <div class="lane-header admin">Admin Panel</div>
+
+      <div class="step empty"></div>
+
+      <div class="step admin">
+        <div class="step-num">2.4</div>
+        <div class="step-title">Review Request</div>
+        <div class="step-desc">Admin opens <strong>Environment Requests</strong> tab at <code>/puhti/admin</code>. Sees user, env name, requested packages, and status badge.</div>
+        <div class="checks">
+          <span class="check ok">Approve</span>
+          <span class="check err">Reject</span>
+        </div>
+      </div>
+
+      <div class="step admin">
+        <div class="step-num">2.6b</div>
+        <div class="step-title">View Build Log</div>
+        <div class="step-desc">Admin clicks <strong>View Log</strong> at any time. API SSHes to Puhti and streams the Slurm output file content into a modal overlay.</div>
+        <div class="step-code">GET /admin/container-log/42
+→ cat envs/build-pytorch3-
+       35457153.out</div>
+      </div>
+    </div>
+
+    <!-- PUHTI -->
+    <div class="lane">
+      <div class="lane-header puhti">Puhti · Slurm</div>
+
+      <div class="step empty"></div>
+      <div class="step empty"></div>
+
+      <div class="step puhti">
+        <div class="step-num">2.6</div>
+        <div class="step-title">Build Venv</div>
+        <div class="step-desc">Small-partition Slurm job runs the build script. Finds Python ≥ 3.8 via module system. Creates isolated venv. Installs packages.</div>
+        <div class="step-code">module load python-data
+# → Python 3.11
+
+VENV=/scratch/.../envs/pytorch3
+python3 -m venv $VENV
+
+# torch: cu121 wheels
+$VENV/bin/pip install \
+  --index-url …/whl/cu121 \
+  torch torchvision
+
+# other packages
+$VENV/bin/pip install matplotlib
+
+echo VENV_BUILD_SUCCESS</div>
+        <div class="checks">
+          <span class="check info">TMPDIR → scratch (no /tmp overflow)</span>
+          <span class="check ok">~5 min total</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- EXTERNAL -->
+    <div class="lane">
+      <div class="lane-header ext">External Services</div>
+
+      <div class="step empty"></div>
+      <div class="step empty"></div>
+
+      <div class="step ext">
+        <div class="step-num">2.5b</div>
+        <div class="step-title">GitHub Record</div>
+        <div class="step-desc">On approval, API commits <code>envs/pytorch3.txt</code> to GitHub repo — tracks who requested it, what packages, when approved, and the Slurm build job ID.</div>
+        <div class="step-code">envs/pytorch3.txt:
+  name: pytorch3
+  requested_by: alice
+  approved_at: 2026-07-15
+  slurm_build_job: 35457153
+  packages:
+    - torch
+    - torchvision
+    - matplotlib</div>
+      </div>
+
+      <div class="step ext">
+        <div class="step-num">2.8b</div>
+        <div class="step-title">Ready Email</div>
+        <div class="step-desc">SMTP sends email to user once poller confirms venv is ready. Includes env name and instructions to select it from the dropdown.</div>
+        <div class="checks">
+          <span class="check ok">ready to use</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<hr class="section-divider">
+
+<!-- ── CHECKS REFERENCE ── -->
+<div style="margin-top:8px">
+  <div class="flow-section-title">③ Checks &amp; Guards Reference</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">
+
+    <div class="step api">
+      <div class="step-title">Authentication</div>
+      <div class="step-desc" style="margin-top:6px">Every job submission validates <code>x-jupyterhub-token</code> against JupyterHub API. Unauthenticated requests receive <span style="color:var(--err)">401</span>.</div>
+    </div>
+
+    <div class="step api">
+      <div class="step-title">Per-user Quota</div>
+      <div class="step-desc" style="margin-top:6px">Max concurrent active jobs per user enforced before sbatch. Excess requests receive <span style="color:var(--err)">429 Too Many Jobs</span>.</div>
+    </div>
+
+    <div class="step api">
+      <div class="step-title">Per-user 100 GB Disk Quota</div>
+      <div class="step-desc" style="margin-top:6px">Total output size checked across all jobs for user. Exceeding 100 GB blocks new submissions with <span style="color:var(--err)">507 Insufficient Storage</span>.</div>
+    </div>
+
+    <div class="step admin">
+      <div class="step-title">Admin Auth</div>
+      <div class="step-desc" style="margin-top:6px">GitHub OAuth via HMAC-signed session cookie. Only users in <code>ADMIN_ALLOWED_USERS</code> env var can access the admin panel.</div>
+    </div>
+
+    <div class="step puhti">
+      <div class="step-title">CORS Lockdown</div>
+      <div class="step-desc" style="margin-top:6px">Only <code>hbv.we3data.com</code> and <code>diwa-data-lab-vre.rahtiapp.fi</code> allowed. Controlled via <code>CORS_ALLOWED_ORIGINS</code> env var.</div>
+    </div>
+
+    <div class="step puhti">
+      <div class="step-title">Partition Time Limits</div>
+      <div class="step-desc" style="margin-top:6px">Each partition has a max wall-time cap enforced by the API before sbatch. Users cannot request more than the partition limit.</div>
+    </div>
+
+    <div class="step ext">
+      <div class="step-title">Env Name Validation</div>
+      <div class="step-desc" style="margin-top:6px">Container names must match <code>^[a-z0-9-]+$</code>. Prevents path traversal and shell injection in Slurm export args.</div>
+    </div>
+
+    <div class="step api">
+      <div class="step-title">Rate Limit &amp; Logging</div>
+      <div class="step-desc" style="margin-top:6px">All key events logged: <code>job_submitted</code>, <code>status_change</code>, <code>sbatch_failed</code>, <code>rate_limit_hit</code>, <code>venv_ready</code>. Rotating log 10 MB × 5 files.</div>
+    </div>
+
+  </div>
+</div>
+
+<div style="text-align:center;margin-top:48px;font-size:11px;color:var(--text3);font-family:var(--mono)">
+  puhti-run-poc · system-diagram.html · updated 2026-07-15
+</div>
+</content>
+</invoke>
