@@ -434,10 +434,40 @@ def admin_container_requests(admin_session: str | None = Cookie(default=None)):
     _require_auth(admin_session)
     with contextlib.closing(_db()) as db:
         rows = db.execute(
-            'SELECT id, username, container, pr_url, pr_number, status, created '
+            'SELECT id, username, container, packages, build_job_id, status, created '
             'FROM container_requests ORDER BY created DESC LIMIT 100'
         ).fetchall()
     return {'requests': [dict(r) for r in rows]}
+
+
+@router.post('/approve-container/{req_id}')
+def approve_container(req_id: int, admin_session: str | None = Cookie(default=None)):
+    _require_auth(admin_session)
+    with contextlib.closing(_db()) as db:
+        row = db.execute(
+            'SELECT container, packages FROM container_requests WHERE id=?', (req_id,)
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, 'Request not found')
+    from api_run_endpoint import _submit_venv_build
+    pkg_list = [p.strip() for p in (row['packages'] or '').split() if p.strip()]
+    job_id = _submit_venv_build(row['container'], pkg_list)
+    with contextlib.closing(_db()) as db:
+        db.execute(
+            "UPDATE container_requests SET status='building', build_job_id=? WHERE id=?",
+            (job_id, req_id)
+        )
+        db.commit()
+    return {'status': 'building', 'slurm_job_id': job_id}
+
+
+@router.post('/reject-container/{req_id}')
+def reject_container(req_id: int, admin_session: str | None = Cookie(default=None)):
+    _require_auth(admin_session)
+    with contextlib.closing(_db()) as db:
+        db.execute("UPDATE container_requests SET status='rejected' WHERE id=?", (req_id,))
+        db.commit()
+    return {'status': 'rejected'}
 
 
 @router.get('/puhti')
@@ -956,13 +986,13 @@ pre.billing{background:var(--bg3);border:1px solid var(--border);border-radius:6
   <div class="page" id="page-containers">
     <div class="tbl-box">
       <div class="tbl-header">
-        <h3>Container Requests</h3>
+        <h3>Environment Requests</h3>
         <span class="chip" id="cr-count">0</span>
         <span id="cr-pending" style="margin-left:8px;font-size:11px;color:var(--orange)"></span>
       </div>
       <div class="tbl-wrap">
       <table>
-        <thead><tr><th>User</th><th>Container</th><th>Status</th><th>PR</th><th>Requested</th></tr></thead>
+        <thead><tr><th>User</th><th>Name</th><th>Packages</th><th>Status</th><th>Slurm Job</th><th>Requested</th><th></th></tr></thead>
         <tbody id="containers-body"></tbody>
       </table>
       </div>
@@ -1658,10 +1688,30 @@ async function loadContainerRequests(){
   document.getElementById('containers-body').innerHTML=data.requests.map(r=>`<tr>
     <td>${r.username||'—'}</td>
     <td style="font-weight:600">${r.container}</td>
+    <td style="color:var(--text2);font-size:11px;max-width:160px;white-space:normal">${(r.packages||'').replace(/ /g,'<br>')}</td>
     <td>${B(r.status)}</td>
-    <td><a href="${r.pr_url}" target="_blank" style="color:var(--blue)">PR #${r.pr_number}</a></td>
+    <td style="color:var(--text2);font-size:11px">${r.build_job_id||'—'}</td>
     <td style="color:var(--text2)">${fmt(r.created)}</td>
-  </tr>`).join()||'<tr><td colspan="5" style="color:var(--text2);padding:12px">No requests</td></tr>';
+    <td>${r.status==='pending'?`
+      <button class="act-btn" style="background:var(--green)" onclick="approveEnv(${r.id})">Approve</button>
+      <button class="act-btn" style="background:var(--red);margin-left:4px" onclick="rejectEnv(${r.id})">Reject</button>
+    `:r.status==='building'?'<span style="color:var(--orange);font-size:11px">building…</span>':''}</td>
+  </tr>`).join()||'<tr><td colspan="7" style="color:var(--text2);padding:12px">No requests</td></tr>';
+}
+
+async function approveEnv(id){
+  if(!confirm('Approve and start building this environment?'))return;
+  const r=await fetch('/admin/approve-container/'+id,{method:'POST'});
+  const d=await r.json();
+  if(r.ok){alert('Build submitted — Slurm job '+d.slurm_job_id);loadContainerRequests();}
+  else alert('Error: '+JSON.stringify(d));
+}
+
+async function rejectEnv(id){
+  if(!confirm('Reject this request?'))return;
+  const r=await fetch('/admin/reject-container/'+id,{method:'POST'});
+  if(r.ok)loadContainerRequests();
+  else alert('Error rejecting request');
 }
 
 function refreshAll(){

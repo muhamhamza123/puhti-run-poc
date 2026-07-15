@@ -6,9 +6,7 @@
 # --partition / --cpus-per-task / --mem / --gres passed at submit time
 
 export MODULEPATH=/appl/modulefiles:$MODULEPATH
-module load apptainer 2>/dev/null || true
-
-SIF=${SIF_PATH:-/scratch/project_2014823/runs/general-compute.sif}
+module load python-data 2>/dev/null || true
 
 mkdir -p "${JOB_DIR}/output"
 mkdir -p "${JOB_DIR}/.packages"
@@ -18,53 +16,41 @@ mkdir -p "${JOB_DIR}/.mplconfig"
 exec > "${JOB_DIR}/stdout.txt" 2> "${JOB_DIR}/stderr.txt"
 
 echo "[run] slurm_job=${SLURM_JOB_ID} host=$(hostname) started=$(date)"
-echo "[run] SIF_PATH=${SIF_PATH}"
-echo "[run] SIF=${SIF}"
+echo "[run] VENV_PATH=${VENV_PATH}"
 echo "[run] USE_GPU=${USE_GPU}"
 echo "[run] JOB_DIR=${JOB_DIR}"
-echo "[run] apptainer=$(which apptainer 2>/dev/null || echo NOT_FOUND)"
+
+PYTHON="${VENV_PATH}/bin/python"
+PIP="${VENV_PATH}/bin/pip"
+
+if [ ! -f "$PYTHON" ]; then
+    echo "[run] ERROR: venv not found at ${VENV_PATH}" >&2
+    exit 1
+fi
+
+echo "[run] python=$($PYTHON --version 2>&1)"
 
 # Install user dependencies into job-local dir on scratch (avoids home dir space limits)
 if [ -f "${JOB_DIR}/requirements.txt" ]; then
-    echo "[run] installing dependencies..."
+    echo "[run] installing job requirements..."
     SHARED_CACHE=/scratch/project_2014823/pip-cache
-    SHARED_TMP=/scratch/project_2014823/pip-tmp
-    mkdir -p "${SHARED_CACHE}" "${SHARED_TMP}"
-    apptainer exec \
-        --bind /scratch:/scratch \
-        --env TMPDIR="${SHARED_TMP}" \
-        --env PIP_CACHE_DIR="${SHARED_CACHE}" \
-        "${SIF}" \
-        /opt/venv/bin/pip install --quiet \
-            -r "${JOB_DIR}/requirements.txt" \
-            --target "${JOB_DIR}/.packages"
+    mkdir -p "${SHARED_CACHE}"
+    "$PIP" install --quiet \
+        --cache-dir "${SHARED_CACHE}" \
+        -r "${JOB_DIR}/requirements.txt" \
+        --target "${JOB_DIR}/.packages" 2>&1 || true
 fi
-
-echo "[run] SIF size: $(ls -lh ${SIF} 2>/dev/null | awk '{print $5}' || echo NOT_FOUND)"
-echo "[run] container python test..."
-apptainer exec --no-home --bind /scratch:/scratch \
-    $( [ "${USE_GPU:-0}" = "1" ] && echo "--nv" ) \
-    "${SIF}" \
-    /opt/venv/bin/python -c "import sys, os; print('python:', sys.executable); print('path:', sys.path[:3]); import torch; print('torch:', torch.__version__)" \
-    2>&1 || echo "[run] container python test FAILED exit=$?"
 
 echo "[run] running script.py..."
 cd "${JOB_DIR}"
-mkdir -p "${JOB_DIR}/.seaborn-data" "${JOB_DIR}/.cache" "${JOB_DIR}/.config"
 
-apptainer exec \
-    --no-home \
-    --bind /scratch:/scratch \
-    --bind "${JOB_DIR}:${JOB_DIR}" \
-    $( [ "${USE_GPU:-0}" = "1" ] && echo "--nv" ) \
-    --env PYTHONPATH="${JOB_DIR}/.packages" \
-    --env MPLCONFIGDIR="${JOB_DIR}/.mplconfig" \
-    --env MPLBACKEND="Agg" \
-    --env SEABORN_DATA="${JOB_DIR}/.seaborn-data" \
-    --env XDG_CACHE_HOME="${JOB_DIR}/.cache" \
-    --env XDG_CONFIG_HOME="${JOB_DIR}/.config" \
-    "${SIF}" \
-    bash -c "export HOME=${JOB_DIR}; /opt/venv/bin/python ${JOB_DIR}/script.py"
+PYTHONPATH="${JOB_DIR}/.packages${PYTHONPATH:+:$PYTHONPATH}" \
+MPLCONFIGDIR="${JOB_DIR}/.mplconfig" \
+MPLBACKEND="Agg" \
+XDG_CACHE_HOME="${JOB_DIR}/.cache" \
+XDG_CONFIG_HOME="${JOB_DIR}/.config" \
+HOME="${JOB_DIR}" \
+    "$PYTHON" "${JOB_DIR}/script.py"
 
 EXIT_CODE=$?
 echo "[run] finished exit=${EXIT_CODE} at $(date)"

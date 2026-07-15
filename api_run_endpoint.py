@@ -22,8 +22,9 @@ DB_PATH     = os.environ.get('RUN_DB_PATH',   '/data/hbv/runs/runs.db')
 
 VALID_PARTITIONS  = {'small', 'large', 'longrun', 'gpu', 'gpumedium'}
 GPU_PARTITIONS    = {'gpu', 'gpumedium'}
-DEFAULT_CONTAINER = 'general-compute'
+DEFAULT_CONTAINER = 'general'
 SSH_CONTROL_PATH  = os.environ.get('SSH_CONTROL_PATH', '/tmp/ssh-puhti-%h-%p-%r')
+PUHTI_ENVS        = os.environ.get('PUHTI_ENVS', '/scratch/project_2014823/envs')
 
 LOG_FILE = os.environ.get('API_LOG_FILE', '/var/log/puhti-run/api.log')
 logging.basicConfig(level=logging.INFO,
@@ -97,6 +98,10 @@ def _db():
     cr_cols = [r[1] for r in conn.execute("PRAGMA table_info(container_requests)").fetchall()]
     if 'email' not in cr_cols:
         conn.execute("ALTER TABLE container_requests ADD COLUMN email TEXT DEFAULT ''")
+    if 'packages' not in cr_cols:
+        conn.execute("ALTER TABLE container_requests ADD COLUMN packages TEXT DEFAULT ''")
+    if 'build_job_id' not in cr_cols:
+        conn.execute("ALTER TABLE container_requests ADD COLUMN build_job_id TEXT DEFAULT ''")
     cols = [r[1] for r in conn.execute("PRAGMA table_info(runs)").fetchall()]
     if 'username' not in cols:
         conn.execute("ALTER TABLE runs ADD COLUMN username TEXT DEFAULT ''")
@@ -174,6 +179,14 @@ def _ssh(cmd: str, timeout: int = 30):
     )
 
 
+def _ssh_write(remote_path: str, content: str, timeout: int = 30):
+    """Write a string to a file on Puhti via SSH stdin → cat."""
+    return subprocess.run(
+        ['ssh', '-i', SSH_KEY] + _SSH_OPTS + [f'{PUHTI_USER}@{PUHTI_HOST}', f'cat > {remote_path}'],
+        input=content, capture_output=True, text=True, timeout=timeout,
+    )
+
+
 def _rsync_to(src: str, dst: str, timeout: int = 300):
     subprocess.run([
         'rsync', '-az',
@@ -191,35 +204,108 @@ def _rsync_from(src: str, dst: str, timeout: int = 300):
     ], check=True, timeout=timeout)
 
 
-# ── Container build notifier ──────────────────────────────────────────────────
+# ── Venv build helpers ────────────────────────────────────────────────────────
+
+def _build_venv_script(name: str, packages: list[str]) -> str:
+    torch_pkgs  = [p for p in packages if p.lower() in ('torch', 'torchvision', 'torchaudio')]
+    other_pkgs  = [p for p in packages if p.lower() not in ('torch', 'torchvision', 'torchaudio')]
+    torch_line  = (
+        f'    "$VENV/bin/pip" install --no-cache-dir \\\n'
+        f'        --index-url https://download.pytorch.org/whl/cu121 \\\n'
+        f'        {" ".join(torch_pkgs)}\n'
+    ) if torch_pkgs else ''
+    other_line  = (
+        f'    "$VENV/bin/pip" install --no-cache-dir {" ".join(other_pkgs)}\n'
+    ) if other_pkgs else ''
+    return f"""#!/bin/bash
+#SBATCH --job-name=build-venv-{name}
+#SBATCH --account=project_2014823
+#SBATCH --partition=small
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=16G
+#SBATCH --time=00:30:00
+#SBATCH --output={PUHTI_ENVS}/build-{name}-%j.out
+
+export MODULEPATH=/appl/modulefiles:$MODULEPATH
+module load python-data 2>/dev/null || true
+
+mkdir -p {PUHTI_ENVS}
+VENV={PUHTI_ENVS}/{name}
+rm -rf "$VENV"
+python3 -m venv "$VENV"
+"$VENV/bin/pip" install --no-cache-dir --upgrade pip
+
+{torch_line}{other_line}
+echo "VENV_BUILD_SUCCESS"
+"""
+
+
+def _submit_venv_build(name: str, packages: list[str]) -> str:
+    """Write build script to Puhti and sbatch it. Returns Slurm job ID."""
+    script = _build_venv_script(name, packages)
+    script_path = f'{PUHTI_ENVS}/build-{name}.sh'
+    _ssh(f'mkdir -p {PUHTI_ENVS}')
+    r = _ssh_write(script_path, script)
+    if r.returncode != 0:
+        raise HTTPException(500, f'Could not write build script: {r.stderr.strip()}')
+    _ssh(f'chmod +x {script_path}')
+    r = _ssh(f'sbatch {script_path}', timeout=30)
+    if r.returncode != 0:
+        raise HTTPException(500, f'sbatch venv build failed: {r.stderr.strip()}')
+    job_id = r.stdout.strip().split()[-1]
+    _log.info('venv_build_submitted name=%s slurm_job=%s', name, job_id)
+    return job_id
+
+
+# ── Container build poller ────────────────────────────────────────────────────
 
 def _container_build_poller():
-    """Background thread: every 10 min check if merged container PRs have a .sif on Puhti."""
+    """Background thread: poll Slurm for venv build jobs every 60 s."""
     while True:
-        time.sleep(600)
+        time.sleep(60)
         try:
             with contextlib.closing(_db()) as db:
                 rows = db.execute(
-                    "SELECT id, username, container, email FROM container_requests WHERE status='merged'"
+                    "SELECT id, username, container, email, build_job_id "
+                    "FROM container_requests WHERE status='building'"
                 ).fetchall()
             if not rows:
                 continue
-            r = _ssh(f'ls {PUHTI_RUNS}/*.sif 2>/dev/null', timeout=15)
-            ready = {os.path.basename(l)[:-4] for l in r.stdout.splitlines() if l.endswith('.sif')}
             for row in rows:
-                if row['container'] in ready:
+                slurm_id = row['build_job_id']
+                if not slurm_id:
+                    continue
+                state_r = _ssh(
+                    f"sacct -j {slurm_id} --format=State --noheader 2>/dev/null | head -1 | tr -d ' '",
+                    timeout=15
+                )
+                state = state_r.stdout.strip()
+                if state == 'COMPLETED':
+                    # Verify the venv python exists
+                    chk = _ssh(f'test -f {PUHTI_ENVS}/{row["container"]}/bin/python && echo OK', timeout=10)
+                    if 'OK' in chk.stdout:
+                        with contextlib.closing(_db()) as db:
+                            db.execute("UPDATE container_requests SET status='ready' WHERE id=?", (row['id'],))
+                            db.commit()
+                        _log.info('venv_ready container=%s user=%s', row['container'], row['username'])
+                        if row['email']:
+                            _send_email(
+                                row['email'],
+                                f'Your Puhti environment "{row["container"]}" is ready ✓',
+                                f'Good news! Your Python environment has finished building on Puhti.\n\n'
+                                f'Environment: {row["container"]}\n\n'
+                                f'Open JupyterLab → Run on Puhti → select "{row["container"]}" from the environment dropdown.'
+                            )
+                    else:
+                        with contextlib.closing(_db()) as db:
+                            db.execute("UPDATE container_requests SET status='failed' WHERE id=?", (row['id'],))
+                            db.commit()
+                        _log.warning('venv_build_completed_no_python container=%s', row['container'])
+                elif state in ('FAILED', 'CANCELLED', 'TIMEOUT', 'NODE_FAIL'):
                     with contextlib.closing(_db()) as db:
-                        db.execute("UPDATE container_requests SET status='ready' WHERE id=?", (row['id'],))
+                        db.execute("UPDATE container_requests SET status='failed' WHERE id=?", (row['id'],))
                         db.commit()
-                    _log.info('container_ready container=%s user=%s', row['container'], row['username'])
-                    if row['email']:
-                        _send_email(
-                            row['email'],
-                            f'Your Puhti container "{row["container"]}" is ready ✓',
-                            f'Good news! Your custom container has finished building on Puhti and is ready to use.\n\n'
-                            f'Container: {row["container"]}\n\n'
-                            f'Open JupyterLab → Run on Puhti → select "{row["container"]}" from the container dropdown.'
-                        )
+                    _log.warning('venv_build_failed container=%s state=%s', row['container'], state)
         except Exception as e:
             _log.warning('container_build_poller error: %s', e)
 
@@ -252,14 +338,14 @@ def get_billing():
 
 @router.get('/containers')
 def list_containers():
-    """Return available container names (any .sif in PUHTI_RUNS)."""
+    """Return available environment names (venv dirs in PUHTI_ENVS)."""
     try:
-        r = _ssh(f'ls {PUHTI_RUNS}/*.sif 2>/dev/null', timeout=15)
-        names = []
-        for line in r.stdout.splitlines():
-            base = os.path.basename(line)
-            if base.endswith('.sif'):
-                names.append(base[:-4])
+        r = _ssh(
+            f'for d in {PUHTI_ENVS}/*/bin/python; do '
+            f'[ -f "$d" ] && basename $(dirname $(dirname "$d")); done 2>/dev/null',
+            timeout=15
+        )
+        names = [n.strip() for n in r.stdout.splitlines() if n.strip()]
         return {'containers': names or [DEFAULT_CONTAINER]}
     except Exception:
         return {'containers': [DEFAULT_CONTAINER], 'puhti_unreachable': True}
@@ -614,7 +700,7 @@ async def request_container_simple(
     username:    str = Form(''),
     email:       str = Form(''),
 ):
-    """Generate a .def from a package list and open a PR."""
+    """Store a venv build request; admin approves it in the admin panel."""
     if not re.match(r'^[a-z0-9-]+$', name):
         raise HTTPException(400, 'Container name must be lowercase letters, numbers, and hyphens only')
 
@@ -622,8 +708,15 @@ async def request_container_simple(
     if not pkg_list:
         raise HTTPException(400, 'At least one package is required')
 
-    content = _generate_def(name, pkg_list)
-    return await _open_container_pr(name, content, description, pkg_list, username, email)
+    with contextlib.closing(_db()) as db:
+        db.execute(
+            "INSERT INTO container_requests (username, container, packages, email, status) VALUES (?,?,?,?,'pending')",
+            (username, name, ' '.join(pkg_list), email)
+        )
+        db.commit()
+
+    _log.info('venv_requested user=%s name=%s packages=%s', username, name, pkg_list)
+    return {'container_name': name, 'status': 'pending', 'message': 'Request submitted — an admin will approve it shortly.'}
 
 
 async def _open_container_pr(name: str, content: bytes, description: str, packages: list[str] = [], username: str = '', email: str = '') -> dict:
@@ -704,42 +797,14 @@ async def request_container(
 
 @router.get('/my-container-requests/{username}')
 def my_container_requests(username: str):
-    """Return container requests for a user, checking live PR status from GitHub."""
+    """Return venv build requests for a user."""
     with contextlib.closing(_db()) as db:
         rows = db.execute(
-            "SELECT id, container, pr_url, pr_number, status, created FROM container_requests "
+            "SELECT id, container, packages, status, created FROM container_requests "
             "WHERE username=? ORDER BY created DESC LIMIT 20",
             (username,)
         ).fetchall()
-    if not rows:
-        return {'requests': []}
-
-    headers = {
-        'Authorization': f'token {GITHUB_TOKEN}',
-        'Accept': 'application/vnd.github+json',
-    }
-
-    results = []
-    for row in rows:
-        r = dict(row)
-        if r['status'] == 'pending' and GITHUB_TOKEN:
-            try:
-                url = f'https://api.github.com/repos/{GITHUB_REPO}/pulls/{r["pr_number"]}'
-                req = urllib.request.Request(url, headers=headers)
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    pr = json.loads(resp.read())
-                if pr.get('merged'):
-                    r['status'] = 'merged'
-                    with contextlib.closing(_db()) as db:
-                        db.execute("UPDATE container_requests SET status='merged' WHERE id=?", (r['id'],))
-                        db.commit()
-                elif pr.get('state') == 'closed':
-                    r['status'] = 'closed'
-            except Exception:
-                pass
-        results.append(r)
-
-    return {'requests': results}
+    return {'requests': [dict(r) for r in rows]}
 
 
 @router.post('/cancel-job/{job_id}')
@@ -860,8 +925,8 @@ async def _submit_job(job_id: str, job_dir: str, partition: str,
 
     use_gpu   = '1' if partition in GPU_PARTITIONS else '0'
     gres      = '--gres=gpu:v100:1' if partition in GPU_PARTITIONS else ''
-    sif_path  = f'{PUHTI_RUNS}/{container}.sif'
-    time_str = f'{time_hours:02d}:00:00'
+    venv_path = f'{PUHTI_ENVS}/{container}'
+    time_str  = f'{time_hours:02d}:00:00'
     cmd = (
         f'sbatch'
         f' --partition={partition}'
@@ -869,7 +934,7 @@ async def _submit_job(job_id: str, job_dir: str, partition: str,
         f' --mem={memory_gb}G'
         f' --time={time_str}'
         f'{" " + gres if gres else ""}'
-        f' --export=ALL,JOB_DIR={remote_dir},USE_GPU={use_gpu},SIF_PATH={sif_path}'
+        f' --export=ALL,JOB_DIR={remote_dir},USE_GPU={use_gpu},VENV_PATH={venv_path}'
         f' {SLURM_SH}'
     )
     r = _ssh(cmd, timeout=30)
