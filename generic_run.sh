@@ -36,6 +36,8 @@ if [ -f "${JOB_DIR}/requirements.txt" ]; then
     echo "[run] installing job requirements..."
     SHARED_CACHE=/scratch/project_2014823/pip-cache
     mkdir -p "${SHARED_CACHE}"
+    export TMPDIR=/scratch/project_2014823/tmp
+    mkdir -p "${TMPDIR}"
     "$PIP" install --quiet \
         --cache-dir "${SHARED_CACHE}" \
         -r "${JOB_DIR}/requirements.txt" \
