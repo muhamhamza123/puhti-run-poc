@@ -1094,17 +1094,19 @@ async def upload_data(
             _write_upload(f, local_path)
             uploaded.append(safe_name)
         _rsync_to(tmp_dir + '/', remote_dir + '/', timeout=600)
-        # Auto-extract any zip files
+        # Auto-extract any zip files into a subfolder named after the zip
         extracted = []
         for name in uploaded:
             if name.lower().endswith('.zip'):
+                folder = name[:-4]  # strip .zip
                 r = _ssh(
-                    f'cd {remote_dir} && unzip -o {name} -d . 2>&1 | tail -3 && echo UNZIP_OK',
+                    f'mkdir -p {remote_dir}/{folder} && '
+                    f'unzip -o {remote_dir}/{name} -d {remote_dir}/{folder} 2>&1 | tail -3 && echo UNZIP_OK',
                     timeout=120,
                 )
                 if 'UNZIP_OK' in r.stdout:
-                    extracted.append(name)
-                    _log.info('data_unzipped user=%s file=%s', username, name)
+                    extracted.append(folder)
+                    _log.info('data_unzipped user=%s file=%s folder=%s', username, name, folder)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
