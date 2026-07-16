@@ -8,7 +8,7 @@ from email.mime.text import MIMEText
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Header, Request
 import collections, threading
 from fastapi.responses import StreamingResponse
-from typing import Optional
+from typing import List, Optional
 
 router = APIRouter()
 
@@ -25,6 +25,7 @@ GPU_PARTITIONS    = {'gpu', 'gpumedium'}
 DEFAULT_CONTAINER = 'general'
 SSH_CONTROL_PATH  = os.environ.get('SSH_CONTROL_PATH', '/tmp/ssh-puhti-%h-%p-%r')
 PUHTI_ENVS        = os.environ.get('PUHTI_ENVS', '/scratch/project_2014823/envs')
+PUHTI_USERDATA    = os.environ.get('PUHTI_USERDATA', '/scratch/project_2014823/userdata')
 
 LOG_FILE = os.environ.get('API_LOG_FILE', '/var/log/puhti-run/api.log')
 logging.basicConfig(level=logging.INFO,
@@ -1011,10 +1012,11 @@ async def _submit_job(job_id: str, job_dir: str, partition: str,
     _ssh(f'mkdir -p {remote_dir}')
     _rsync_to(job_dir + '/', remote_dir + '/')
 
-    use_gpu   = '1' if partition in GPU_PARTITIONS else '0'
-    gres      = '--gres=gpu:v100:1' if partition in GPU_PARTITIONS else ''
-    venv_path = f'{PUHTI_ENVS}/{container}'
-    time_str  = f'{time_hours:02d}:00:00'
+    use_gpu       = '1' if partition in GPU_PARTITIONS else '0'
+    gres          = '--gres=gpu:v100:1' if partition in GPU_PARTITIONS else ''
+    venv_path     = f'{PUHTI_ENVS}/{container}'
+    userdata_path = f'{PUHTI_USERDATA}/{user_slug}'
+    time_str      = f'{time_hours:02d}:00:00'
     cmd = (
         f'sbatch'
         f' --partition={partition}'
@@ -1023,6 +1025,7 @@ async def _submit_job(job_id: str, job_dir: str, partition: str,
         f' --time={time_str}'
         f'{" " + gres if gres else ""}'
         f' --export=ALL,JOB_DIR={remote_dir},USE_GPU={use_gpu},VENV_PATH={venv_path}'
+        f',USERDATA_PATH={userdata_path}'
         f' {SLURM_SH}'
     )
     r = _ssh(cmd, timeout=30)
@@ -1055,6 +1058,97 @@ def _strip_magics(script_path: str) -> None:
 def _write_upload(upload: UploadFile, path: str):
     with open(path, 'wb') as f:
         shutil.copyfileobj(upload.file, f)
+
+
+# ── User data endpoints ───────────────────────────────────────────────────────
+
+def _userdata_dir(username: str) -> str:
+    slug = re.sub(r'[^a-z0-9_-]', '_', username.lower()) if username else 'anonymous'
+    return f'{PUHTI_USERDATA}/{slug}'
+
+
+@router.post('/upload-data')
+async def upload_data(
+    files: List[UploadFile] = File(...),
+    username: str = Form(''),
+    x_jupyterhub_token: Optional[str] = Header(None),
+):
+    """Upload one or more data files to the user's persistent scratch directory on Puhti."""
+    if x_jupyterhub_token:
+        username = _validate_jupyterhub_token(x_jupyterhub_token)
+    if not username:
+        raise HTTPException(401, 'Username required')
+
+    remote_dir = _userdata_dir(username)
+    _ssh(f'mkdir -p {remote_dir}')
+
+    tmp_dir = os.path.join('/tmp', f'userdata-{uuid.uuid4()}')
+    os.makedirs(tmp_dir)
+    uploaded = []
+    try:
+        for f in files:
+            safe_name = os.path.basename(f.filename or 'file')
+            if not safe_name or safe_name.startswith('.'):
+                raise HTTPException(400, f'Invalid filename: {f.filename}')
+            local_path = os.path.join(tmp_dir, safe_name)
+            _write_upload(f, local_path)
+            uploaded.append(safe_name)
+        _rsync_to(tmp_dir + '/', remote_dir + '/', timeout=600)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    _log.info('data_uploaded user=%s files=%s', username, uploaded)
+    return {'uploaded': uploaded, 'userdata_path': remote_dir}
+
+
+@router.get('/list-data')
+def list_data(
+    username: str = '',
+    x_jupyterhub_token: Optional[str] = Header(None),
+):
+    """List files in the user's persistent data directory on Puhti."""
+    if x_jupyterhub_token:
+        username = _validate_jupyterhub_token(x_jupyterhub_token)
+    if not username:
+        raise HTTPException(401, 'Username required')
+
+    remote_dir = _userdata_dir(username)
+    r = _ssh(
+        f'[ -d {remote_dir} ] && '
+        f'find {remote_dir} -maxdepth 1 -type f -printf "%f\\t%s\\n" 2>/dev/null || true',
+        timeout=15,
+    )
+    files = []
+    for line in r.stdout.strip().splitlines():
+        parts = line.split('\t')
+        if len(parts) == 2:
+            files.append({'name': parts[0], 'size_bytes': int(parts[1])})
+
+    return {'files': files, 'userdata_path': remote_dir}
+
+
+@router.delete('/delete-data/{filename}')
+def delete_data(
+    filename: str,
+    username: str = '',
+    x_jupyterhub_token: Optional[str] = Header(None),
+):
+    """Delete a specific file from the user's persistent data directory."""
+    if x_jupyterhub_token:
+        username = _validate_jupyterhub_token(x_jupyterhub_token)
+    if not username:
+        raise HTTPException(401, 'Username required')
+    # Prevent path traversal
+    if '/' in filename or '..' in filename or filename.startswith('.'):
+        raise HTTPException(400, 'Invalid filename')
+
+    remote_dir = _userdata_dir(username)
+    remote_path = f'{remote_dir}/{filename}'
+    r = _ssh(f'[ -f {remote_path} ] && rm {remote_path} && echo OK || echo NOT_FOUND', timeout=15)
+    if 'NOT_FOUND' in r.stdout:
+        raise HTTPException(404, f'File not found: {filename}')
+    _log.info('data_deleted user=%s file=%s', username, filename)
+    return {'deleted': filename}
 
 
 def _read_tail(path: str, lines: int = 100) -> str:

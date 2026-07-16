@@ -19,6 +19,7 @@ echo "[run] slurm_job=${SLURM_JOB_ID} host=$(hostname) started=$(date)"
 echo "[run] VENV_PATH=${VENV_PATH}"
 echo "[run] USE_GPU=${USE_GPU}"
 echo "[run] JOB_DIR=${JOB_DIR}"
+echo "[run] USERDATA_PATH=${USERDATA_PATH}"
 
 PYTHON="${VENV_PATH}/bin/python"
 PIP="${VENV_PATH}/bin/pip"
