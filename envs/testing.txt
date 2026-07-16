@@ -1,0 +1,6 @@
+name: testing
+requested_by: muhamhamza123
+approved_at: 2026-07-16 11:15 UTC
+slurm_build_job: 35476798
+packages:
+  - torch
