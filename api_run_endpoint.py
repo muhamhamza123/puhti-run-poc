@@ -1145,28 +1145,34 @@ def list_data(
     return {'files': files, 'userdata_path': remote_dir}
 
 
-@router.delete('/delete-data/{filename}')
+@router.delete('/delete-data/{filepath:path}')
 def delete_data(
-    filename: str,
+    filepath: str,
     username: str = '',
     x_jupyterhub_token: Optional[str] = Header(None),
 ):
-    """Delete a specific file from the user's persistent data directory."""
+    """Delete a file or folder from the user's persistent data directory."""
     if x_jupyterhub_token:
         username = _validate_jupyterhub_token(x_jupyterhub_token)
     if not username:
         raise HTTPException(401, 'Username required')
-    # Prevent path traversal
-    if '/' in filename or '..' in filename or filename.startswith('.'):
-        raise HTTPException(400, 'Invalid filename')
+    # Prevent path traversal — no .. segments allowed
+    if '..' in filepath or filepath.startswith('/'):
+        raise HTTPException(400, 'Invalid path')
 
     remote_dir = _userdata_dir(username)
-    remote_path = f'{remote_dir}/{filename}'
-    r = _ssh(f'[ -f {remote_path} ] && rm {remote_path} && echo OK || echo NOT_FOUND', timeout=15)
+    remote_path = f'{remote_dir}/{filepath}'
+    # Works for both files and directories
+    r = _ssh(
+        f'if [ -e {remote_path} ] || [ -d {remote_path} ]; then '
+        f'rm -rf {remote_path} && echo OK; '
+        f'else echo NOT_FOUND; fi',
+        timeout=30,
+    )
     if 'NOT_FOUND' in r.stdout:
-        raise HTTPException(404, f'File not found: {filename}')
-    _log.info('data_deleted user=%s file=%s', username, filename)
-    return {'deleted': filename}
+        raise HTTPException(404, f'Not found: {filepath}')
+    _log.info('data_deleted user=%s path=%s', username, filepath)
+    return {'deleted': filepath}
 
 
 def _read_tail(path: str, lines: int = 100) -> str:
