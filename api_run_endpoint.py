@@ -1094,11 +1094,22 @@ async def upload_data(
             _write_upload(f, local_path)
             uploaded.append(safe_name)
         _rsync_to(tmp_dir + '/', remote_dir + '/', timeout=600)
+        # Auto-extract any zip files
+        extracted = []
+        for name in uploaded:
+            if name.lower().endswith('.zip'):
+                r = _ssh(
+                    f'cd {remote_dir} && unzip -o {name} -d . 2>&1 | tail -3 && echo UNZIP_OK',
+                    timeout=120,
+                )
+                if 'UNZIP_OK' in r.stdout:
+                    extracted.append(name)
+                    _log.info('data_unzipped user=%s file=%s', username, name)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     _log.info('data_uploaded user=%s files=%s', username, uploaded)
-    return {'uploaded': uploaded, 'userdata_path': remote_dir}
+    return {'uploaded': uploaded, 'extracted': extracted, 'userdata_path': remote_dir}
 
 
 @router.get('/list-data')
@@ -1115,14 +1126,19 @@ def list_data(
     remote_dir = _userdata_dir(username)
     r = _ssh(
         f'[ -d {remote_dir} ] && '
-        f'find {remote_dir} -maxdepth 1 -type f -printf "%f\\t%s\\n" 2>/dev/null || true',
+        f'find {remote_dir} -maxdepth 3 ! -type d -printf "%P\\t%s\\n" 2>/dev/null || true',
         timeout=15,
     )
     files = []
     for line in r.stdout.strip().splitlines():
         parts = line.split('\t')
         if len(parts) == 2:
-            files.append({'name': parts[0], 'size_bytes': int(parts[1])})
+            rel = parts[0]
+            files.append({
+                'name': rel,
+                'full_path': f'{remote_dir}/{rel}',
+                'size_bytes': int(parts[1]),
+            })
 
     return {'files': files, 'userdata_path': remote_dir}
 
