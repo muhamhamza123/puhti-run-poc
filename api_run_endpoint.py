@@ -572,8 +572,8 @@ def my_jobs_status(username: str, x_jupyterhub_token: Optional[str] = Header(Non
                     _rsync_from(f'{remote_dir}/', os.path.join(NFS_RUNS, job['job_id']) + '/')
                 except Exception:
                     pass
-                output_dir = os.path.join(NFS_RUNS, job['job_id'], 'output')
-                new_status = 'done' if (os.path.isdir(output_dir) and os.listdir(output_dir)) else 'failed'
+                stdout_file = os.path.join(NFS_RUNS, job['job_id'], 'stdout.txt')
+                new_status = 'done' if os.path.exists(stdout_file) else 'failed'
             elif slurm_state in ('RUNNING', 'COMPLETING'):
                 new_status = 'running'
             elif slurm_state in ('PENDING', 'CONFIGURING'):
